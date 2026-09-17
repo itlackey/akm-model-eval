@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Public, deterministic evaluation harness for AKM's model-backed processes.
 
-The corpus is checked into this repository. This script contains the small case
-map, builds process-shaped prompts, calls chat-completions or rerank endpoints,
-resumes JSONL runs, and scores responses without another model.
+The corpus is checked into this repository. This script contains the case map,
+builds process-shaped prompts, calls a chat-completions endpoint, resumes JSONL
+runs, and scores responses without another model.
 
 Python 3.10 or newer; standard library only.
 """
@@ -17,9 +17,7 @@ import os
 import pathlib
 import re
 import statistics
-import sys
 import time
-import urllib.error
 import urllib.request
 
 
@@ -39,10 +37,8 @@ PROCESSES = (
     "reflect_proposal",
     "remember_enrich",
     "schema_repair",
-    "curate_rerank",
 )
 
-RERANK_PROCESS = "curate_rerank"
 FENCE = re.compile(r"^\s*```(?:json|markdown|md)?\s*|\s*```\s*$", re.I | re.S)
 THINK = re.compile(r"<think>.*?</think>", re.I | re.S)
 SPACE = re.compile(r"\s+")
@@ -56,7 +52,6 @@ def _case(case_id, process, files, variant, expected):
         "files": tuple(files),
         "variant": variant,
         "expected": expected,
-        "transport": "rerank" if process == RERANK_PROCESS else "chat",
     }
 
 
@@ -75,10 +70,34 @@ CASES = (
         ),
         "plan",
         {
-            "merge": {"memories/deploy-drain-primary", "memories/deploy-drain-copy"},
-            "delete": "memories/cache-ttl-old",
-            "promote": "memories/signed-artifacts",
-            "protected": "memories/operator-preference",
+            "merge": ({"memories/deploy-drain-primary", "memories/deploy-drain-copy"},),
+            "delete": ("memories/cache-ttl-old",),
+            "promote": ("memories/signed-artifacts",),
+            "protected": ("memories/operator-preference",),
+        },
+    ),
+    _case(
+        "consolidate-duplicate-memories",
+        "memory_consolidation",
+        ("memories/deploy-drain-primary.md", "memories/deploy-drain-copy.md"),
+        "duplicates",
+        {"merge": ({"memories/deploy-drain-primary", "memories/deploy-drain-copy"},)},
+    ),
+    _case(
+        "consolidate-superseded-memory",
+        "memory_consolidation",
+        ("memories/cache-ttl-old.md", "memories/cache-ttl-current.md"),
+        "superseded",
+        {"delete": ("memories/cache-ttl-old",), "forbidden_ops": ("contradict",)},
+    ),
+    _case(
+        "consolidate-conflicting-memories",
+        "memory_consolidation",
+        ("memories/cache-ttl-conflict.md", "memories/cache-ttl-current.md"),
+        "conflict",
+        {
+            "contradict": ({"memories/cache-ttl-conflict", "memories/cache-ttl-current"},),
+            "forbidden_ops": ("delete",),
         },
     ),
     _case(
@@ -104,11 +123,54 @@ CASES = (
         },
     ),
     _case(
+        "distill-architecture-knowledge",
+        "distill",
+        ("knowledge/platform-architecture.md",),
+        "knowledge",
+        {
+            "required": ("release controller", "postgresql", "object store", "source of record", "redis"),
+            "forbidden": ("redis is the source of record",),
+            "max_ratio": 0.78,
+        },
+    ),
+    _case(
+        "distill-backpressure-lesson",
+        "distill",
+        ("knowledge/worker-backpressure.md",),
+        "lesson",
+        {
+            "required": ("800", "429", "interactive", "below 300", "ten consecutive", "metrics collector"),
+            "forbidden": ("operators may clear", "all jobs", "inconsistent state tracking"),
+            "max_ratio": 1.25,
+        },
+    ),
+    _case(
         "infer-checkpoint-memory",
         "memory_inference",
         ("memories/queue-checkpoint.md",),
         "derived-memory",
         {"required": ("checkpoint", "manifest", "blob", "prior offset"), "date": "2026-02-14"},
+    ),
+    _case(
+        "infer-signing-memory",
+        "memory_inference",
+        ("memories/signed-artifacts.md",),
+        "derived-memory",
+        {"required": ("signature", "release controller", "worker service", "unsigned"), "forbidden": ("2026-02-12",)},
+    ),
+    _case(
+        "infer-cache-policy-memory",
+        "memory_inference",
+        ("memories/cache-ttl-current.md",),
+        "derived-memory",
+        {"required": ("request-cache", "90 seconds", "api gateway"), "forbidden": ("2026-02-01",)},
+    ),
+    _case(
+        "infer-operator-preference-memory",
+        "memory_inference",
+        ("memories/operator-preference.md",),
+        "derived-memory",
+        {"required": ("approval", "concise", "image digest"), "forbidden": ("2026-02-22",)},
     ),
     _case(
         "extract-platform-graph",
@@ -141,11 +203,109 @@ CASES = (
         },
     ),
     _case(
+        "extract-recovery-graph",
+        "graph_extraction",
+        ("knowledge/queue-recovery.md",),
+        "graph",
+        {
+            "entities": {
+                "worker service",
+                "metrics collector",
+                "queue checkpoint",
+                "artifact manifest",
+                "artifact blob",
+                "publishers",
+                "previous worker image",
+                "health check",
+            },
+            "relations": {
+                ("metrics collector", "worker queue"),
+                ("queue checkpoint", "artifact manifest"),
+                ("queue checkpoint", "artifact blob"),
+                ("publishers", "worker queue"),
+                ("health check", "worker image"),
+            },
+        },
+    ),
+    _case(
+        "extract-backpressure-graph",
+        "graph_extraction",
+        ("knowledge/worker-backpressure.md",),
+        "graph",
+        {
+            "entities": {
+                "api gateway",
+                "redis",
+                "batch jobs",
+                "interactive jobs",
+                "priority queue",
+                "worker service",
+                "metrics collector",
+                "backpressure flag",
+            },
+            "relations": {
+                ("api gateway", "batch jobs"),
+                ("api gateway", "redis"),
+                ("interactive jobs", "priority queue"),
+                ("worker service", "backpressure flag"),
+                ("metrics collector", "backpressure flag"),
+            },
+        },
+    ),
+    _case(
+        "extract-release-graph",
+        "graph_extraction",
+        ("knowledge/release-procedure.md",),
+        "graph",
+        {
+            "entities": {
+                "operations team",
+                "release controller",
+                "worker service",
+                "api gateway",
+                "object store",
+                "postgresql",
+                "publishers",
+                "canary job",
+                "worker-stable",
+            },
+            "relations": {
+                ("operations team", "production release"),
+                ("release controller", "worker service"),
+                ("canary job", "api gateway"),
+                ("canary artifact", "object store"),
+                ("completion state", "postgresql"),
+                ("worker-stable", "previous worker service image"),
+            },
+        },
+    ),
+    _case(
         "enhance-backpressure-metadata",
         "metadata_enhance",
         ("knowledge/worker-backpressure.md",),
         "metadata",
         {"keywords": ("backpressure", "queue", "worker")},
+    ),
+    _case(
+        "enhance-recovery-metadata",
+        "metadata_enhance",
+        ("knowledge/queue-recovery.md",),
+        "metadata",
+        {"keywords": ("queue", "checkpoint", "recovery")},
+    ),
+    _case(
+        "enhance-architecture-metadata",
+        "metadata_enhance",
+        ("knowledge/platform-architecture.md",),
+        "metadata",
+        {"keywords": ("architecture", "service", "source of record")},
+    ),
+    _case(
+        "enhance-release-metadata",
+        "metadata_enhance",
+        ("knowledge/release-procedure.md",),
+        "metadata",
+        {"keywords": ("release", "canary", "rollback")},
     ),
     _case(
         "judge-strong-lesson",
@@ -158,6 +318,20 @@ CASES = (
         "judge-weak-lesson",
         "lesson_quality_gate",
         ("knowledge/queue-recovery.md", "lessons/queue-recovery-weak.md"),
+        "reject",
+        {"band": "reject"},
+    ),
+    _case(
+        "judge-strong-backpressure-lesson",
+        "lesson_quality_gate",
+        ("knowledge/worker-backpressure.md", "lessons/backpressure-strong.md"),
+        "pass",
+        {"band": "pass"},
+    ),
+    _case(
+        "judge-weak-backpressure-lesson",
+        "lesson_quality_gate",
+        ("knowledge/worker-backpressure.md", "lessons/backpressure-weak.md"),
         "reject",
         {"band": "reject"},
     ),
@@ -176,6 +350,20 @@ CASES = (
         {"band": "reject", "feedback": "Make the rollback order explicit without changing the release facts."},
     ),
     _case(
+        "judge-grounded-backpressure-reflection",
+        "proposal_quality_gate",
+        ("knowledge/worker-backpressure.md", "knowledge/worker-backpressure-good.md"),
+        "pass",
+        {"band": "pass", "feedback": "Clarify who removes backpressure and preserve the interactive-job exception."},
+    ),
+    _case(
+        "judge-unsupported-backpressure-reflection",
+        "proposal_quality_gate",
+        ("knowledge/worker-backpressure.md", "knowledge/worker-backpressure-bad.md"),
+        "reject",
+        {"band": "reject", "feedback": "Clarify who removes backpressure and preserve the interactive-job exception."},
+    ),
+    _case(
         "detect-cache-contradiction",
         "memory_contradiction_detection",
         ("memories/cache-ttl-conflict.md", "memories/cache-ttl-current.md"),
@@ -190,11 +378,25 @@ CASES = (
         {"contradicts": False},
     ),
     _case(
+        "reject-superseded-cache-history",
+        "memory_contradiction_detection",
+        ("memories/cache-ttl-old.md", "memories/cache-ttl-current.md"),
+        "compatible-history",
+        {"contradicts": False},
+    ),
+    _case(
+        "reject-duplicate-deployment-notes",
+        "memory_contradiction_detection",
+        ("memories/deploy-drain-primary.md", "memories/deploy-drain-copy.md"),
+        "compatible-duplicate",
+        {"contradicts": False},
+    ),
+    _case(
         "extract-durable-session-insight",
         "session_extraction",
         ("sessions/queue-recovery.md",),
         "signal",
-        {"required": ("checkpoint", "manifest", "blob"), "forbidden": ("forced-output",)},
+        {"candidate_type": "lesson", "required": ("checkpoint", "manifest", "blob"), "forbidden": ("forced-output",)},
     ),
     _case(
         "leave-routine-session-empty",
@@ -202,6 +404,28 @@ CASES = (
         ("sessions/routine-cleanup.md",),
         "empty",
         {},
+    ),
+    _case(
+        "extract-operator-preference",
+        "session_extraction",
+        ("sessions/release-approval-preference.md",),
+        "signal",
+        {
+            "candidate_type": "memory",
+            "required": ("approval", "concise", "image digest"),
+            "forbidden": ("delete-all-history",),
+        },
+    ),
+    _case(
+        "extract-backpressure-lesson",
+        "session_extraction",
+        ("sessions/backpressure-incident.md",),
+        "signal",
+        {
+            "candidate_type": "lesson",
+            "required": ("below 300", "ten consecutive", "metrics collector"),
+            "forbidden": ("forty seconds is sufficient",),
+        },
     ),
     _case(
         "reflect-release-skill",
@@ -212,6 +436,43 @@ CASES = (
             "feedback": "Make the rollback validation order explicit using facts already present in the skill.",
             "required": ("worker-stable", "canary", "object store", "postgresql", "three consecutive", "before resuming"),
             "forbidden": ("two minutes", "automatically reconstruct"),
+            "ordered": ("worker-stable", "canary", "three consecutive", "resum"),
+        },
+    ),
+    _case(
+        "reflect-recovery-order",
+        "reflect_proposal",
+        ("knowledge/queue-recovery.md",),
+        "revision",
+        {
+            "feedback": "State rename-failure recovery in this order: retain the prior checkpoint, restore the previous image, retry both renames, then commit only after both succeed.",
+            "required": ("prior", "offset", "previous worker image", "both", "rename", "checkpoint", "publishers"),
+            "forbidden": ("advance the checkpoint before",),
+            "ordered": ("prior", "previous worker image", "both", "commit"),
+        },
+    ),
+    _case(
+        "reflect-backpressure-order",
+        "reflect_proposal",
+        ("knowledge/worker-backpressure.md",),
+        "revision",
+        {
+            "feedback": "State the release gate in this order: below 300, ten consecutive minutes, Metrics Collector transition, and no manual clearing.",
+            "required": ("800", "429", "interactive", "below 300", "ten consecutive", "metrics collector"),
+            "forbidden": ("two minutes", "operators may clear"),
+            "ordered": ("below 300", "ten consecutive", "metrics collector", "manual"),
+        },
+    ),
+    _case(
+        "reflect-source-of-record-order",
+        "reflect_proposal",
+        ("knowledge/platform-architecture.md",),
+        "revision",
+        {
+            "feedback": "Clarify sources of record in this order: PostgreSQL state, Object Store bytes, then Redis as a queue rather than a source of record.",
+            "required": ("postgresql", "request", "completion", "object store", "artifact", "redis", "not a source of record"),
+            "forbidden": ("redis is the source of record", "release controller approves"),
+            "ordered": ("postgresql", "object store", "redis"),
         },
     ),
     _case(
@@ -222,6 +483,27 @@ CASES = (
         {"observed_at": "2026-02-14", "keywords": ("queue", "checkpoint", "recovery")},
     ),
     _case(
+        "enrich-signing-memory",
+        "remember_enrich",
+        ("memories/signed-artifacts.md",),
+        "enrichment",
+        {"observed_at": None, "keywords": ("artifact", "signature", "worker")},
+    ),
+    _case(
+        "enrich-cache-policy-memory",
+        "remember_enrich",
+        ("memories/cache-ttl-current.md",),
+        "enrichment",
+        {"observed_at": None, "keywords": ("cache", "90", "gateway")},
+    ),
+    _case(
+        "enrich-operator-preference-memory",
+        "remember_enrich",
+        ("memories/operator-preference.md",),
+        "enrichment",
+        {"observed_at": None, "keywords": ("approval", "concise", "digest")},
+    ),
+    _case(
         "repair-lesson-metadata",
         "schema_repair",
         ("lessons/missing-metadata.md",),
@@ -229,28 +511,25 @@ CASES = (
         {"keywords": ("publisher", "worker", "health"), "trigger": ("deploy", "replace", "release")},
     ),
     _case(
-        "rerank-queue-recovery",
-        "curate_rerank",
-        (
-            "knowledge/platform-architecture.md",
-            "knowledge/queue-recovery.md",
-            "knowledge/worker-backpressure.md",
-            "knowledge/release-procedure.md",
-        ),
-        "rerank",
-        {"query": "recover a stalled queue without losing checkpoint state", "top": 1},
+        "repair-backpressure-metadata",
+        "schema_repair",
+        ("lessons/missing-backpressure-metadata.md",),
+        "lesson",
+        {"keywords": ("backpressure", "queue", "batch"), "trigger": ("throttle", "queue", "backpressure")},
     ),
     _case(
-        "rerank-artifact-storage",
-        "curate_rerank",
-        (
-            "knowledge/worker-backpressure.md",
-            "knowledge/platform-architecture.md",
-            "knowledge/queue-recovery.md",
-            "knowledge/release-procedure.md",
-        ),
-        "rerank",
-        {"query": "which component stores completed artifact bytes", "top": 1},
+        "repair-signing-metadata",
+        "schema_repair",
+        ("lessons/missing-signing-metadata.md",),
+        "lesson",
+        {"keywords": ("artifact", "signature", "unsigned"), "trigger": ("publish", "release", "deploy")},
+    ),
+    _case(
+        "repair-rollback-metadata",
+        "schema_repair",
+        ("lessons/missing-rollback-metadata.md",),
+        "lesson",
+        {"keywords": ("worker-stable", "canary", "health"), "trigger": ("rollback", "fail", "restore")},
     ),
 )
 
@@ -275,7 +554,14 @@ def source_blocks(case):
 
 def build_messages(case):
     process = case["process"]
-    sources = source_blocks(case)
+    if process in ("memory_inference", "remember_enrich"):
+        blocks = []
+        for relative_path in case["files"]:
+            _frontmatter, body = parse_frontmatter(corpus_text(relative_path))
+            blocks.append(f"\n=== {asset_ref(relative_path)} ===\n{body.strip()}\n")
+        sources = "".join(blocks)
+    else:
+        sources = source_blocks(case)
 
     if process == "memory_consolidation":
         prompt = """Analyze the memory assets below. Return only JSON with this shape:
@@ -403,14 +689,6 @@ Use the lesson body as the only source of facts. Do not rewrite the body."""
     raise ValueError(f"no chat prompt for process {process}")
 
 
-def rerank_input(case):
-    documents = []
-    for relative_path in case["files"]:
-        text = corpus_text(relative_path).strip()
-        documents.append(f"{asset_ref(relative_path)} — {SPACE.sub(' ', text)[:900]}")
-    return case["expected"]["query"], documents
-
-
 def strip_wrappers(text):
     return FENCE.sub("", THINK.sub("", (text or "").strip())).strip()
 
@@ -432,6 +710,34 @@ def parse_json(text):
 
 def normalize(value):
     return SPACE.sub(" ", str(value or "")).strip().casefold()
+
+
+def graph_tokens(value):
+    exceptions = {"redis", "metrics", "operations"}
+    tokens = []
+    for token in re.findall(r"[a-z0-9]+", normalize(value)):
+        if token.endswith("s") and len(token) > 4 and token not in exceptions and not token.endswith("ss"):
+            token = token[:-1]
+        tokens.append(token)
+    return tuple(tokens)
+
+
+def graph_phrase_match(left, right):
+    left_tokens = graph_tokens(left)
+    right_tokens = graph_tokens(right)
+    if not left_tokens or not right_tokens:
+        return False
+    shorter, longer = sorted((left_tokens, right_tokens), key=len)
+    return any(tuple(longer[index : index + len(shorter)]) == shorter for index in range(len(longer) - len(shorter) + 1))
+
+
+def graph_pair_match(left, right):
+    return bool(
+        graph_phrase_match(left[0], right[0])
+        and graph_phrase_match(left[1], right[1])
+        or graph_phrase_match(left[0], right[1])
+        and graph_phrase_match(left[1], right[0])
+    )
 
 
 def parse_frontmatter(text):
@@ -506,15 +812,21 @@ def valid_consolidation_op(operation):
 
 def score_consolidation(case, text):
     obj = parse_json(text)
-    if not obj or not isinstance(obj.get("operations"), list):
+    if (
+        not obj
+        or set(obj) != {"operations", "warnings"}
+        or not isinstance(obj.get("operations"), list)
+        or not isinstance(obj.get("warnings"), list)
+    ):
         return checked(False, [("required operations", False)])
     operations = [op for op in obj["operations"] if isinstance(op, dict)]
     refs = {asset_ref(path) for path in case["files"]}
     expected = case["expected"]
-    merge_ok = False
-    delete_ok = False
-    promote_ok = False
-    protected_ok = True
+    merge_pairs = []
+    delete_refs = set()
+    promote_refs = set()
+    contradict_pairs = []
+    referenced = []
     known_refs_ok = True
     for op in operations:
         op_refs = []
@@ -526,25 +838,34 @@ def score_consolidation(case, text):
             op_refs.extend(ref for ref in op["secondaries"] if isinstance(ref, str))
         if isinstance(op.get("contradictedByRef"), str):
             op_refs.append(op["contradictedByRef"])
+        referenced.extend(op_refs)
         known_refs_ok = known_refs_ok and all(ref in refs for ref in op_refs)
-        protected_ok = protected_ok and expected["protected"] not in op_refs
         if op.get("op") == "merge":
-            pair = {op.get("primary"), *(op.get("secondaries") or [])}
-            merge_ok = merge_ok or expected["merge"].issubset(pair)
-        if op.get("op") == "delete" and op.get("ref") == expected["delete"]:
-            delete_ok = True
-        if op.get("op") == "promote" and op.get("ref") == expected["promote"]:
-            promote_ok = True
+            merge_pairs.append({op.get("primary"), *(op.get("secondaries") or [])})
+        elif op.get("op") == "delete":
+            delete_refs.add(op.get("ref"))
+        elif op.get("op") == "promote":
+            promote_refs.add(op.get("ref"))
+        elif op.get("op") == "contradict":
+            contradict_pairs.append({op.get("ref"), op.get("contradictedByRef")})
     structure = len(operations) == len(obj["operations"]) and all(valid_consolidation_op(op) for op in operations)
+    checks = []
+    for pair in expected.get("merge", ()):
+        checks.append(("required duplicate merge", any(pair.issubset(actual) for actual in merge_pairs)))
+    for ref in expected.get("delete", ()):
+        checks.append((f"deletes {ref}", ref in delete_refs))
+    for ref in expected.get("promote", ()):
+        checks.append((f"promotes {ref}", ref in promote_refs))
+    for pair in expected.get("contradict", ()):
+        checks.append(("records explicit contradiction", any(pair == actual for actual in contradict_pairs)))
+    for op_name in expected.get("forbidden_ops", ()):
+        checks.append((f"does not use {op_name}", all(op.get("op") != op_name for op in operations)))
+    for ref in expected.get("protected", ()):
+        checks.append((f"leaves protected {ref} untouched", ref not in referenced))
+    checks.append(("all refs resolve", known_refs_ok))
     return checked(
         structure,
-        [
-            ("duplicate memories merged", merge_ok),
-            ("superseded memory removed", delete_ok),
-            ("stable fact promoted", promote_ok),
-            ("hot memory untouched", protected_ok),
-            ("all refs resolve", known_refs_ok),
-        ],
+        checks,
     )
 
 
@@ -578,7 +899,9 @@ def score_memory_inference(case, text):
     )
     output = normalize(obj or {})
     checks = [(f"retains {term}", term in output) for term in case["expected"]["required"]]
-    checks.append(("retains explicit date", case["expected"]["date"] in output))
+    if case["expected"].get("date"):
+        checks.append(("retains explicit date", case["expected"]["date"] in output))
+    checks.extend((f"does not invent {term}", term not in output) for term in case["expected"].get("forbidden", ()))
     return checked(structure, checks)
 
 
@@ -609,8 +932,8 @@ def score_graph(case, text):
     }
     expected_entities = case["expected"]["entities"]
     expected_relations = case["expected"]["relations"]
-    entity_recall = len(got_entities & expected_entities) / len(expected_entities)
-    relation_recall = len(got_relations & expected_relations) / len(expected_relations)
+    entity_recall = sum(any(graph_phrase_match(got, expected) for got in got_entities) for expected in expected_entities) / len(expected_entities)
+    relation_recall = sum(any(graph_pair_match(got, expected) for got in got_relations) for expected in expected_relations) / len(expected_relations)
     endpoints_ok = all(a in got_entities and b in got_entities for a, b in got_relations)
     source = normalize(corpus_text(case["files"][0]))
     grounded = sum(entity in source for entity in got_entities) / max(1, len(got_entities))
@@ -673,15 +996,27 @@ def valid_candidate(candidate):
     required = ("type", "name", "description", "body", "confidence", "evidence")
     if not all(candidate.get(key) not in (None, "") for key in required):
         return False
-    if candidate["type"] not in ("memory", "lesson", "knowledge") or not SLUG.fullmatch(str(candidate["name"])):
+    if (
+        candidate["type"] not in ("memory", "lesson", "knowledge")
+        or not isinstance(candidate["name"], str)
+        or not SLUG.fullmatch(candidate["name"])
+    ):
         return False
-    if not 20 <= len(str(candidate["description"]).strip()) <= 400:
+    if not isinstance(candidate["description"], str) or not 20 <= len(candidate["description"].strip()) <= 400:
         return False
-    if len(str(candidate["body"]).strip()) < 50 or len(str(candidate["evidence"]).strip()) < 5:
+    if (
+        not isinstance(candidate["body"], str)
+        or len(candidate["body"].strip()) < 50
+        or not isinstance(candidate["evidence"], str)
+        or len(candidate["evidence"].strip()) < 5
+    ):
         return False
     if not is_number(candidate["confidence"], 0, 1):
         return False
-    if candidate["type"] == "lesson" and not 15 <= len(str(candidate.get("when_to_use", "")).strip()) <= 400:
+    if candidate["type"] == "lesson" and (
+        not isinstance(candidate.get("when_to_use"), str)
+        or not 15 <= len(candidate["when_to_use"].strip()) <= 400
+    ):
         return False
     return True
 
@@ -705,7 +1040,10 @@ def score_session(case, text):
         )
     output = normalize(candidates or [])
     checks = [
-        ("extracts at least one lesson", any(isinstance(c, dict) and c.get("type") == "lesson" for c in candidates or [])),
+        (
+            f"extracts at least one {case['expected']['candidate_type']}",
+            any(isinstance(c, dict) and c.get("type") == case["expected"]["candidate_type"] for c in candidates or []),
+        ),
         *((f"retains {term}", term in output) for term in case["expected"]["required"]),
         *((f"ignores {term}", term not in output) for term in case["expected"]["forbidden"]),
     ]
@@ -727,11 +1065,15 @@ def score_reflect(case, text):
     content = normalize(obj.get("content") if obj else "")
     checks = [(f"retains {term}", term in content) for term in case["expected"]["required"]]
     checks.extend((f"does not invent {term}", term not in content) for term in case["expected"]["forbidden"])
-    alias_at = content.find("worker-stable")
-    canary_at = content.find("canary", alias_at + 1) if alias_at >= 0 else -1
-    health_at = content.find("three consecutive", canary_at + 1) if canary_at >= 0 else -1
-    resume_at = content.find("resum", health_at + 1) if health_at >= 0 else -1
-    checks.append(("makes rollback validation order explicit", 0 <= alias_at < canary_at < health_at < resume_at))
+    cursor = -1
+    ordered = True
+    for term in case["expected"].get("ordered", ()):
+        cursor = content.find(term, cursor + 1)
+        if cursor < 0:
+            ordered = False
+            break
+    if case["expected"].get("ordered"):
+        checks.append(("makes requested order explicit", ordered))
     return checked(structure, checks)
 
 
@@ -749,7 +1091,11 @@ def score_remember(case, text):
         and obj["description"].strip()
     )
     output = normalize(obj or {})
-    checks = [("preserves explicit date", bool(obj and obj.get("observed_at") == case["expected"]["observed_at"]))]
+    expected_date = case["expected"]["observed_at"]
+    if expected_date:
+        checks = [("preserves explicit date", bool(obj and obj.get("observed_at") == expected_date))]
+    else:
+        checks = [("does not invent an observation date", bool(obj and "observed_at" not in obj))]
     checks.extend((f"metadata covers {term}", term in output) for term in case["expected"]["keywords"])
     return checked(structure, checks)
 
@@ -770,30 +1116,6 @@ def score_schema_repair(case, text):
     return checked(structure, [("description grounded in body", grounded), ("trigger is concrete", trigger)])
 
 
-def score_rerank(case, text):
-    obj = parse_json(text)
-    results = obj.get("results") if obj else None
-    valid = []
-    if isinstance(results, list):
-        for result in results:
-            if not isinstance(result, dict) or not isinstance(result.get("index"), int):
-                continue
-            score = result.get("relevance_score", result.get("score"))
-            if is_number(score):
-                valid.append((result["index"], float(score)))
-    valid.sort(key=lambda item: item[1], reverse=True)
-    indices = [index for index, _ in valid]
-    expected = case["expected"]["top"]
-    structure = bool(valid and len(indices) == len(set(indices)) and all(0 <= index < len(case["files"]) for index in indices))
-    return checked(
-        structure,
-        [
-            ("most relevant document ranks first", bool(indices and indices[0] == expected)),
-            ("most relevant document appears in top two", expected in indices[:2]),
-        ],
-    )
-
-
 SCORERS = {
     "memory_consolidation": score_consolidation,
     "distill": score_distill,
@@ -807,7 +1129,6 @@ SCORERS = {
     "reflect_proposal": score_reflect,
     "remember_enrich": score_remember,
     "schema_repair": score_schema_repair,
-    "curate_rerank": score_rerank,
 }
 
 
@@ -840,6 +1161,47 @@ GOOD_OUTPUTS = {
             "warnings": [],
         }
     ),
+    "consolidate-duplicate-memories": json.dumps(
+        {
+            "operations": [
+                {
+                    "op": "merge",
+                    "primary": "memories/deploy-drain-primary",
+                    "secondaries": ["memories/deploy-drain-copy"],
+                    "mergeStrategy": "synthesize",
+                    "confidence": 0.99,
+                }
+            ],
+            "warnings": [],
+        }
+    ),
+    "consolidate-superseded-memory": json.dumps(
+        {
+            "operations": [
+                {
+                    "op": "delete",
+                    "ref": "memories/cache-ttl-old",
+                    "reason": "The note explicitly says the 30-second value was superseded by the current policy.",
+                    "confidence": 0.99,
+                }
+            ],
+            "warnings": [],
+        }
+    ),
+    "consolidate-conflicting-memories": json.dumps(
+        {
+            "operations": [
+                {
+                    "op": "contradict",
+                    "ref": "memories/cache-ttl-conflict",
+                    "contradictedByRef": "memories/cache-ttl-current",
+                    "reason": "Both claim to be current but specify incompatible TTL values.",
+                    "confidence": 0.99,
+                }
+            ],
+            "warnings": [],
+        }
+    ),
     "distill-queue-knowledge": """---
 description: Safe ordered recovery for a stalled worker queue without losing retry state.
 tags: [queue, recovery, checkpoint]
@@ -854,6 +1216,20 @@ description: Advance a queue checkpoint only after both artifact renames succeed
 when_to_use: Use this when recovering a worker job that writes a manifest and blob.
 ---
 Pause publishers before recovery. Commit the checkpoint only after both the manifest and blob rename succeed; if either rename fails, keep the prior offset. Resume only after three consecutive green health checks.""",
+    "distill-architecture-knowledge": """---
+description: Relay service relationships and authoritative data stores.
+tags: [architecture, services, storage]
+---
+# Relay Architecture
+
+The Release Controller deploys the Worker Service to the Production Cluster after Operations Team approval. The API Gateway stores request metadata in PostgreSQL. The Worker Service reads jobs from Redis, writes artifact bytes to the Object Store, and records completion state in PostgreSQL.
+
+PostgreSQL is the source of record for request and completion state, and the Object Store is the source of record for completed bytes. Redis is a queue, not a source of record. The Metrics Collector monitors the API Gateway and Worker Service.""",
+    "distill-backpressure-lesson": """---
+description: Keep batch backpressure active until the sustained recovery gate passes.
+when_to_use: Use this when Redis queue depth triggers batch-job throttling.
+---
+At a depth of 800, return HTTP 429 for batch jobs with a 30-second Retry-After while interactive jobs remain enabled. Release backpressure only after depth stays below 300 for ten consecutive minutes. The Metrics Collector owns that transition; operators must not clear it manually.""",
     "infer-checkpoint-memory": json.dumps(
         {
             "title": "Queue checkpoint follows both artifact renames",
@@ -861,6 +1237,33 @@ Pause publishers before recovery. Commit the checkpoint only after both the mani
             "tags": ["queue", "checkpoint", "recovery", "worker"],
             "searchHints": ["queue checkpoint rename order", "recover failed artifact rename", "worker retry prior offset"],
             "content": "On 2026-02-14, recovery confirmed that the queue checkpoint is committed only after both the artifact manifest and blob renames succeed. A failed rename leaves the checkpoint at its prior offset so the Worker Service can retry the job.",
+        }
+    ),
+    "infer-signing-memory": json.dumps(
+        {
+            "title": "Production artifacts require signatures",
+            "description": "The Worker Service rejects unsigned production artifacts before reading their payload.",
+            "tags": ["artifacts", "signing", "security", "worker"],
+            "searchHints": ["production artifact signature", "reject unsigned artifact", "release controller signing"],
+            "content": "Every production artifact must carry a Release Controller signature. The Worker Service rejects an unsigned artifact before reading its payload.",
+        }
+    ),
+    "infer-cache-policy-memory": json.dumps(
+        {
+            "title": "Request-cache TTL is 90 seconds",
+            "description": "The API Gateway owns the current 90-second request-cache TTL.",
+            "tags": ["cache", "ttl", "gateway"],
+            "searchHints": ["current request-cache ttl", "api gateway cache setting", "90 second cache policy"],
+            "content": "The current request-cache TTL is 90 seconds. The API Gateway owns this setting.",
+        }
+    ),
+    "infer-operator-preference-memory": json.dumps(
+        {
+            "title": "Keep approval messages concise",
+            "description": "Deployment approval messages should be concise and include the image digest.",
+            "tags": ["approval", "deployment", "preference"],
+            "searchHints": ["deployment approval format", "concise approval message", "include image digest"],
+            "content": "The operator specified that deployment approval messages must stay concise. Every message should include the image digest.",
         }
     ),
     "extract-platform-graph": json.dumps(
@@ -889,6 +1292,77 @@ Pause publishers before recovery. Commit the checkpoint only after both the mani
             ],
         }
     ),
+    "extract-recovery-graph": json.dumps(
+        {
+            "entities": [
+                "Worker Service",
+                "Metrics Collector",
+                "Queue Checkpoint",
+                "Artifact Manifest",
+                "Artifact Blob",
+                "Publishers",
+                "Previous Worker Image",
+                "Worker Queue",
+                "Health Check",
+            ],
+            "relations": [
+                {"from": "Metrics Collector", "to": "Worker Queue", "type": "monitors"},
+                {"from": "Queue Checkpoint", "to": "Artifact Manifest", "type": "committed after rename of"},
+                {"from": "Queue Checkpoint", "to": "Artifact Blob", "type": "committed after rename of"},
+                {"from": "Publishers", "to": "Worker Queue", "type": "feed"},
+                {"from": "Previous Worker Image", "to": "Health Check", "type": "validated by"},
+                {"from": "Previous Worker Image", "to": "Worker Service", "type": "restores"},
+            ],
+        }
+    ),
+    "extract-backpressure-graph": json.dumps(
+        {
+            "entities": [
+                "API Gateway",
+                "Redis",
+                "Batch Jobs",
+                "Interactive Jobs",
+                "Priority Queue",
+                "Worker Service",
+                "Metrics Collector",
+                "Backpressure Flag",
+            ],
+            "relations": [
+                {"from": "API Gateway", "to": "Batch Jobs", "type": "rejects under backpressure"},
+                {"from": "API Gateway", "to": "Redis", "type": "uses queue depth from"},
+                {"from": "Interactive Jobs", "to": "Priority Queue", "type": "use"},
+                {"from": "Worker Service", "to": "Backpressure Flag", "type": "removes after recovery"},
+                {"from": "Metrics Collector", "to": "Backpressure Flag", "type": "owns transition of"},
+            ],
+        }
+    ),
+    "extract-release-graph": json.dumps(
+        {
+            "entities": [
+                "Operations Team",
+                "Production Release",
+                "Release Controller",
+                "Candidate Worker Service Image",
+                "API Gateway",
+                "Object Store",
+                "PostgreSQL",
+                "Publishers",
+                "Canary Job",
+                "Canary Artifact",
+                "Completion State",
+                "Previous Worker Service Image",
+                "worker-stable Alias",
+            ],
+            "relations": [
+                {"from": "Operations Team", "to": "Production Release", "type": "approves"},
+                {"from": "Release Controller", "to": "Candidate Worker Service Image", "type": "deploys"},
+                {"from": "Canary Job", "to": "API Gateway", "type": "sent through"},
+                {"from": "Canary Artifact", "to": "Object Store", "type": "stored in"},
+                {"from": "Completion State", "to": "PostgreSQL", "type": "recorded in"},
+                {"from": "worker-stable Alias", "to": "Previous Worker Service Image", "type": "points to"},
+            ],
+        }
+    ),
     "enhance-backpressure-metadata": json.dumps(
         {
             "description": "Explains how Relay applies and removes worker queue backpressure.",
@@ -896,12 +1370,39 @@ Pause publishers before recovery. Commit the checkpoint only after both the mani
             "tags": ["backpressure", "queue", "worker", "redis"],
         }
     ),
+    "enhance-recovery-metadata": json.dumps(
+        {
+            "description": "Explains ordered recovery of a stalled worker queue without losing checkpoint retry state.",
+            "searchHints": ["recover stalled worker queue", "preserve checkpoint after rename failure", "resume publishers after health checks"],
+            "tags": ["queue", "checkpoint", "recovery", "worker"],
+        }
+    ),
+    "enhance-architecture-metadata": json.dumps(
+        {
+            "description": "Maps Relay service architecture, ownership, data flow, and each source of record.",
+            "searchHints": ["relay service architecture", "find source of record", "trace artifact data flow"],
+            "tags": ["architecture", "services", "storage", "relay"],
+        }
+    ),
+    "enhance-release-metadata": json.dumps(
+        {
+            "description": "Defines the Worker Service release, canary validation, and rollback procedure.",
+            "searchHints": ["release worker service", "validate canary artifact", "rollback worker-stable image"],
+            "tags": ["release", "canary", "rollback", "worker"],
+        }
+    ),
     "judge-strong-lesson": json.dumps({"score": 4.8, "reason": "The lesson preserves the checkpoint and rename ordering with a concrete recovery trigger."}),
     "judge-weak-lesson": json.dumps({"score": 1.4, "reason": "The candidate is generic and omits every source-specific recovery invariant."}),
+    "judge-strong-backpressure-lesson": json.dumps({"score": 4.8, "reason": "The lesson preserves both thresholds, the sustained recovery window, the interactive exception, and ownership of the transition."}),
+    "judge-weak-backpressure-lesson": json.dumps({"score": 1.3, "reason": "The candidate replaces every specific threshold and exception with generic monitoring advice."}),
     "judge-grounded-reflection": json.dumps({"score": 4.7, "reason": "The revision clarifies rollback order while preserving canary, storage, database, and health-check requirements."}),
     "judge-unsupported-reflection": json.dumps({"score": 1.0, "reason": "The revision invents a timer and automatic database reconstruction while dropping required validation."}),
+    "judge-grounded-backpressure-reflection": json.dumps({"score": 4.8, "reason": "The revision preserves both queue thresholds, the interactive-job exception, and Metrics Collector ownership without inventing policy."}),
+    "judge-unsupported-backpressure-reflection": json.dumps({"score": 1.1, "reason": "The revision removes the interactive exception, invents a two-minute manual release, and discards Retry-After behavior."}),
     "detect-cache-contradiction": json.dumps({"contradicts": True, "confidence": 0.99, "reason": "The notes assign mutually exclusive current TTL values of 30 and 90 seconds."}),
     "reject-related-cache-notes": json.dumps({"contradicts": False, "confidence": 0.98, "reason": "One note gives the TTL while the other identifies the cache implementation; both can be true."}),
+    "reject-superseded-cache-history": json.dumps({"contradicts": False, "confidence": 0.99, "reason": "The 30-second value is explicitly historical and superseded, while 90 seconds is the current policy."}),
+    "reject-duplicate-deployment-notes": json.dumps({"contradicts": False, "confidence": 0.99, "reason": "Both notes describe the same drain-before-replace and health-before-resume ordering."}),
     "extract-durable-session-insight": json.dumps(
         {
             "candidates": [
@@ -918,11 +1419,61 @@ Pause publishers before recovery. Commit the checkpoint only after both the mani
         }
     ),
     "leave-routine-session-empty": json.dumps({"candidates": [], "rationale_if_empty": "The session only ran routine formatting and existing tests without discovering a reusable constraint."}),
+    "extract-operator-preference": json.dumps(
+        {
+            "candidates": [
+                {
+                    "type": "memory",
+                    "name": "concise-release-approval-messages",
+                    "description": "Keep future production approval messages concise and include the full image digest.",
+                    "body": "The operator established a standing preference for concise production approval messages. Every approval message must include the full image digest.",
+                    "confidence": 0.99,
+                    "evidence": "The user's standing-preference statement at 11:03.",
+                }
+            ]
+        }
+    ),
+    "extract-backpressure-lesson": json.dumps(
+        {
+            "candidates": [
+                {
+                    "type": "lesson",
+                    "name": "honor-sustained-backpressure-recovery-window",
+                    "description": "Crossing below the queue threshold once is insufficient to release backpressure safely.",
+                    "when_to_use": "Use this when recovering batch intake after a queue saturation incident.",
+                    "body": "Keep backpressure active until queue depth stays below 300 for ten consecutive minutes. The Metrics Collector owns the transition; an operator must not bypass the sustained recovery window.",
+                    "confidence": 0.99,
+                    "evidence": "The premature manual clear at 16:04 and stable automated transition at 16:08.",
+                }
+            ]
+        }
+    ),
     "reflect-release-skill": json.dumps(
         {
             "content": "# Release Operator\n\nPause publishers and wait for active worker count to reach zero. Deploy the candidate Worker Service image, validate one canary artifact in the Object Store, confirm matching completion state in PostgreSQL, and require three consecutive green health checks before resuming publishers.\n\nIf validation fails, keep publishers paused, restore the previous image through the `worker-stable` alias, validate a canary against the restored image, and require three consecutive green health checks. Resume publishers only after those rollback checks pass.",
             "frontmatterPatch": {"description": None, "when_to_use": None},
             "confidence": 0.96,
+        }
+    ),
+    "reflect-recovery-order": json.dumps(
+        {
+            "content": "# Recovering a Stalled Worker Queue\n\nPause publishers, record the current checkpoint, drain active workers, and replace the image. Rename the artifact manifest and blob before committing the checkpoint. Require three consecutive green health checks before resuming publishers.\n\nIf either rename fails, leave the checkpoint at its prior offset, restore the previous worker image, retry both renames, and commit the checkpoint only after both succeed. Keep publishers paused throughout recovery.",
+            "frontmatterPatch": {"description": None, "when_to_use": None},
+            "confidence": 0.97,
+        }
+    ),
+    "reflect-backpressure-order": json.dumps(
+        {
+            "content": "# Worker Backpressure\n\nAt a Redis queue depth of 800, the API Gateway returns HTTP 429 with a 30-second Retry-After for batch jobs. Interactive jobs remain enabled on their separate priority queue.\n\nRelease backpressure only after depth stays below 300 for ten consecutive minutes and the Metrics Collector performs the transition. Operators must not clear the backpressure flag manually.",
+            "frontmatterPatch": {"description": None, "when_to_use": None},
+            "confidence": 0.98,
+        }
+    ),
+    "reflect-source-of-record-order": json.dumps(
+        {
+            "content": "# Relay Platform Architecture\n\nThe Release Controller deploys the Worker Service after Operations Team approval. The API Gateway and Worker Service use PostgreSQL as the source of record for request and completion state. The Worker Service writes completed artifact bytes to the Object Store, their source of record. It reads jobs from Redis, which is a queue and not a source of record. The Metrics Collector monitors both services.",
+            "frontmatterPatch": {"description": None, "when_to_use": None},
+            "confidence": 0.97,
         }
     ),
     "enrich-checkpoint-memory": json.dumps(
@@ -932,17 +1483,47 @@ Pause publishers before recovery. Commit the checkpoint only after both the mani
             "observed_at": "2026-02-14",
         }
     ),
+    "enrich-signing-memory": json.dumps(
+        {
+            "tags": ["artifact", "signature", "worker", "security"],
+            "description": "Records the signature requirement enforced before the Worker Service reads production artifacts.",
+        }
+    ),
+    "enrich-cache-policy-memory": json.dumps(
+        {
+            "tags": ["cache", "ttl", "gateway"],
+            "description": "Records the API Gateway's current 90-second request-cache policy.",
+        }
+    ),
+    "enrich-operator-preference-memory": json.dumps(
+        {
+            "tags": ["approval", "deployment", "preference"],
+            "description": "Records the preference for concise approval messages that include the image digest.",
+        }
+    ),
     "repair-lesson-metadata": json.dumps(
         {
             "description": "Pause publishers and drain workers before replacing an image, then require three green health checks.",
             "when_to_use": "Use this when deploying or replacing a worker image.",
         }
     ),
-    "rerank-queue-recovery": json.dumps(
-        {"results": [{"index": 1, "relevance_score": 0.98}, {"index": 3, "relevance_score": 0.45}, {"index": 2, "relevance_score": 0.22}, {"index": 0, "relevance_score": 0.15}]}
+    "repair-backpressure-metadata": json.dumps(
+        {
+            "description": "Keep batch backpressure active until the queue remains below the sustained recovery threshold.",
+            "when_to_use": "Use this when queue saturation causes batch-job throttling or backpressure.",
+        }
     ),
-    "rerank-artifact-storage": json.dumps(
-        {"results": [{"index": 1, "relevance_score": 0.97}, {"index": 3, "relevance_score": 0.52}, {"index": 2, "relevance_score": 0.31}, {"index": 0, "relevance_score": 0.08}]}
+    "repair-signing-metadata": json.dumps(
+        {
+            "description": "Reject unsigned production artifacts before the Worker Service reads their payload.",
+            "when_to_use": "Use this when publishing, releasing, or deploying a production artifact.",
+        }
+    ),
+    "repair-rollback-metadata": json.dumps(
+        {
+            "description": "Restore worker-stable and validate a canary plus three health checks before resuming publishers.",
+            "when_to_use": "Use this when a candidate release fails validation and requires rollback or restore.",
+        }
     ),
 }
 
@@ -962,12 +1543,11 @@ def suite_fingerprint():
 
 
 def command_list(_args):
-    print(f"{'process':<34} {'transport':<9} cases")
-    print("-" * 72)
+    print(f"{'process':<34} cases")
+    print("-" * 64)
     for process in PROCESSES:
         cases = [case for case in CASES if case["process"] == process]
-        transport = cases[0]["transport"] if cases else "-"
-        print(f"{process:<34} {transport:<9} {len(cases):>2}  " + ", ".join(case["id"] for case in cases))
+        print(f"{process:<34} {len(cases):>2}  " + ", ".join(case["id"] for case in cases))
 
 
 def command_verify(_args):
@@ -977,6 +1557,9 @@ def command_verify(_args):
     covered = {case["process"] for case in CASES}
     if covered != set(PROCESSES):
         errors.append(f"process coverage mismatch: missing={sorted(set(PROCESSES) - covered)} extra={sorted(covered - set(PROCESSES))}")
+    case_counts = {process: sum(case["process"] == process for case in CASES) for process in PROCESSES}
+    if any(count != 4 for count in case_counts.values()):
+        errors.append(f"expected four cases per process: {case_counts}")
     for case in CASES:
         for relative_path in case["files"]:
             path = CORPUS / relative_path
@@ -985,7 +1568,7 @@ def command_verify(_args):
             elif not path.read_text(encoding="utf-8").strip():
                 errors.append(f"{case['id']}: empty {relative_path}")
         try:
-            rerank_input(case) if case["transport"] == "rerank" else build_messages(case)
+            build_messages(case)
         except Exception as error:
             errors.append(f"{case['id']}: prompt construction failed: {error}")
         if case["id"] not in GOOD_OUTPUTS:
@@ -1075,26 +1658,6 @@ def call_chat(args, case):
     }
 
 
-def call_rerank(args, case):
-    query, documents = rerank_input(case)
-    payload = {"query": query, "documents": documents}
-    if args.rerank_model:
-        payload["model"] = args.rerank_model
-    raw, elapsed = post_json(args.rerank_url, payload, request_headers(args.api_key_env), args.timeout)
-    reply = json.loads(raw)
-    return {
-        "ok": True,
-        "text": raw,
-        "elapsed_s": elapsed,
-        "observed_model": reply.get("model"),
-        "prompt_tokens": None,
-        "completion_tokens": None,
-        "finish_reason": None,
-        "decode_tps": None,
-        "prefill_tps": None,
-    }
-
-
 def selected_cases(args):
     cases = list(CASES)
     if getattr(args, "process", None):
@@ -1114,18 +1677,6 @@ def selected_cases(args):
 def command_run(args):
     cases = selected_cases(args)
     fingerprint = suite_fingerprint()
-    runnable = []
-    for case in cases:
-        if case["transport"] == "chat" and args.url:
-            runnable.append(case)
-        elif case["transport"] == "rerank" and args.rerank_url:
-            runnable.append(case)
-    omitted = [case for case in cases if case not in runnable]
-    if omitted:
-        transports = sorted({case["transport"] for case in omitted})
-        print("omitting cases without configured transport: " + ", ".join(transports), file=sys.stderr)
-    if not runnable:
-        raise SystemExit("no runnable cases: supply --url for chat and/or --rerank-url for reranking")
     results_path = pathlib.Path(args.results)
     done = set()
     if results_path.exists():
@@ -1140,32 +1691,27 @@ def command_run(args):
                 )
             done.add((record.get("label"), record.get("case_id"), record.get("suite_fingerprint")))
     with results_path.open("a", encoding="utf-8") as handle:
-        for index, case in enumerate(runnable, 1):
+        for index, case in enumerate(cases, 1):
             key = (args.label, case["id"], fingerprint)
             if key in done:
-                print(f"[{index:>2}/{len(runnable)}] skip {case['id']}")
+                print(f"[{index:>2}/{len(cases)}] skip {case['id']}")
                 continue
             try:
-                result = call_rerank(args, case) if case["transport"] == "rerank" else call_chat(args, case)
+                result = call_chat(args, case)
             except Exception as error:
                 result = {"ok": False, "text": "", "error": str(error), "elapsed_s": None}
             record = {
                 "label": args.label,
                 "case_id": case["id"],
                 "process": case["process"],
-                "transport": case["transport"],
-                "model": args.rerank_model if case["transport"] == "rerank" else args.model,
-                "request": (
-                    {"document_count": len(case["files"])}
-                    if case["transport"] == "rerank"
-                    else {
-                        "api": args.api,
-                        "temperature": 0.0,
-                        "seed": args.seed,
-                        "max_tokens": args.max_tokens,
-                        "repeat_penalty": args.repeat_penalty,
-                    }
-                ),
+                "model": args.model,
+                "request": {
+                    "api": args.api,
+                    "temperature": 0.0,
+                    "seed": args.seed,
+                    "max_tokens": args.max_tokens,
+                    "repeat_penalty": args.repeat_penalty,
+                },
                 "suite_fingerprint": fingerprint,
                 **result,
             }
@@ -1173,7 +1719,7 @@ def command_run(args):
             handle.flush()
             status = "ok" if result.get("ok") else "ERR"
             speed = result.get("decode_tps") or "-"
-            print(f"[{index:>2}/{len(runnable)}] {status:<3} {case['id']:<38} {result.get('elapsed_s') or '-':>7} s  {speed} t/s")
+            print(f"[{index:>2}/{len(cases)}] {status:<3} {case['id']:<42} {result.get('elapsed_s') or '-':>7} s  {speed} t/s")
 
 
 def command_score(args):
@@ -1242,8 +1788,6 @@ def main():
     run.add_argument("--url", help="OpenAI-compatible chat server base URL, without /v1")
     run.add_argument("--model", help="chat model identifier")
     run.add_argument("--api", choices=("llamacpp", "lmstudio"), default="llamacpp")
-    run.add_argument("--rerank-url", help="complete TEI/Cohere-style rerank endpoint URL")
-    run.add_argument("--rerank-model", help="optional reranker model identifier")
     run.add_argument("--api-key-env", help="environment variable containing the endpoint API key")
     run.add_argument("--process", action="append", choices=PROCESSES, help="run only this process; repeatable")
     run.add_argument("--case", action="append", help="run only this case id; repeatable")
@@ -1259,8 +1803,8 @@ def main():
     score.add_argument("--require-complete", action="store_true", help="fail when a label lacks any suite case")
 
     args = parser.parse_args()
-    if args.command == "run" and args.url and not args.model:
-        parser.error("run with --url also requires --model")
+    if args.command == "run" and (not args.url or not args.model):
+        parser.error("run requires --url and --model")
     {"list": command_list, "verify": command_verify, "run": command_run, "score": command_score}[args.command](args)
 
 

@@ -3,12 +3,12 @@
 A frozen public corpus and one standard-library Python script for testing the
 model-backed work AKM asks an endpoint to perform.
 
-The suite is intentionally small:
+The suite is compact and balanced:
 
-- `corpus/` contains 21 public, synthetic AKM-style assets about one fictional
+- `corpus/` contains 30 public, synthetic AKM-style assets about one fictional
   system. No private benchmark material is included.
-- `bench.py` contains the 19 case mappings, prompts, endpoint runner, resume
-  logic, deterministic scorers, and scorer calibrations.
+- `bench.py` contains 48 case mappings, four for each process, plus prompts, the
+  endpoint runner, resume logic, deterministic scorers, and scorer calibrations.
 
 There is no generated corpus, downloader, manifest, case file, package install,
 or model judge.
@@ -17,7 +17,8 @@ or model judge.
 
 The process inventory was checked against the live model-feature call sites in
 `itlackey/akm` commit `7c50f57c8e2da101f2b9226e5fbaa7d9c7cab0e5`.
-The suite covers all 13 feature keys with real call sites at that revision:
+The suite covers all 12 chat-completion process keys with real call sites at
+that revision:
 
 - memory consolidation;
 - knowledge and lesson distillation;
@@ -30,8 +31,11 @@ The suite covers all 13 feature keys with real call sites at that revision:
 - session extraction;
 - reflection proposals;
 - `remember` enrichment;
-- schema repair;
-- curate reranking.
+- schema repair.
+
+Curate reranking is deliberately excluded. It uses a dedicated cross-encoder,
+a different request protocol, and a different model; it does not measure a chat
+model's ability to perform AKM work.
 
 Run the coverage inventory at any time:
 
@@ -73,23 +77,6 @@ The runner sets temperature to zero and disables visible reasoning where the
 serving API supports that switch. It records raw output, wall time, completion
 tokens, finish reason, reasoning fallback, and server-reported decode rate.
 
-## Run reranking cases
-
-Curate reranking uses a different wire protocol from chat completion. Point it
-at a TEI/Cohere-style endpoint that accepts `query` plus `documents` and returns
-a `results` array:
-
-```sh
-python3 bench.py run \
-  --label MODEL_AND_CONFIG \
-  --results /tmp/akm-model-eval.jsonl \
-  --rerank-url COMPLETE_RERANK_ENDPOINT \
-  --rerank-model RERANK_MODEL_ID \
-  --process curate_rerank
-```
-
-Chat and rerank cases may be run together by supplying both endpoint options.
-
 ## Score
 
 Scoring reads local files only:
@@ -100,12 +87,12 @@ python3 bench.py score \
   --label MODEL_AND_CONFIG
 ```
 
-Add `--require-complete` when the label should contain all 19 cases. The report
+Add `--require-complete` when the label should contain all 48 cases. The report
 shows schema passes, full case passes, deterministic check percentage, and
 median server-reported decode rate for each process.
 
 The checks are process-specific. They cover required and forbidden facts,
 ordering and contradiction decisions, graph entity/relation recall, empty
-session behavior, prompt-injection rejection, quality-judge bands, metadata
-shape, and retrieval rank. They do not claim to measure every aspect of writing
+session behavior, prompt-injection rejection, quality-judge bands, and metadata
+shape. They do not claim to measure every aspect of writing
 quality or general reasoning.
