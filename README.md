@@ -1,17 +1,32 @@
 # AKM Model Eval
 
-A frozen public corpus and one standard-library Python script for testing the
-model-backed work AKM asks an endpoint to perform.
+A frozen public corpus and one standard-library Python script for comparing
+models on the work AKM asks an endpoint to perform. This is a model capability
+benchmark. It does not measure whether AKM itself improves an agent; `akm-eval`
+owns that job.
 
-The suite is compact and balanced:
+The suite has two workload tiers:
 
-- `corpus/` contains 30 public, synthetic AKM-style assets about one fictional
-  system. No private benchmark material is included.
-- `bench.py` contains 48 case mappings, four for each process, plus prompts, the
-  endpoint runner, resume logic, deterministic scorers, and scorer calibrations.
+- `compact` contains 48 focused cases, four for each of AKM's 12 model-backed
+  processes. Its 30 synthetic assets describe one fictional system and expose
+  precise facts that deterministic checks can verify.
+- `deep` contains 39 cases. Its core is the bakeoff's original 24-item workload:
+  12 consolidations and 12 distillations built from 49 static source documents.
+  Client/project names, user and session identifiers, internal paths, dates, and
+  the original item IDs were replaced with stable generic aliases. Document
+  count, ordering, structure, numeric constraints, and overlap between versions
+  were retained.
+- The other 15 deep cases add work the original bakeoff did not cover: four
+  long-document graph extractions, four grounded revisions, four proposal-quality
+  judgments, and three multi-document syntheses. They use 15 exact documents
+  copied from the public AKM revisions named in their corpus paths. The largest
+  case contains 118,767 source characters.
 
-There is no generated corpus, downloader, manifest, case file, package install,
-or model judge.
+The anonymized fixtures preserve the original workload, not byte identity, so
+new scores are not numerically interchangeable with results from the private
+bakeoff corpus. There is deliberately no mapping back to its private IDs.
+Everything needed to run is checked in: there is no corpus generator,
+downloader, package install, separate case file, or model judge.
 
 ## Coverage
 
@@ -43,11 +58,19 @@ Run the coverage inventory at any time:
 python3 bench.py list
 ```
 
+The compact tier supplies process breadth and precise regression checks. The
+deep tier tests long, complicated work where context actually matters:
+reconciling overlapping knowledge, preserving constraints during distillation,
+extracting a graph from a substantial document, revising without inventing
+facts, judging a large proposed change, and synthesizing several sources. Short
+schema and classification calls are not padded to look long.
+
 ## Verify
 
-Verification is offline. It checks every corpus path, complete process coverage,
-case IDs, every process-specific scorer against a known-good response, rejection
-of empty responses, and the publication-safety scan.
+Verification is offline. It checks the exact corpus inventory, all 49 anonymized
+bakeoff documents, complete process coverage, case IDs, every process-specific
+scorer against a known-good response, rejection of empty responses, exact-quote
+grounding failures, and publication-safety markers.
 
 ```sh
 python3 bench.py verify
@@ -71,7 +94,8 @@ python3 bench.py run \
 The URL is the server base without `/v1`. Add `--api lmstudio` for LM Studio's
 native response route. Optional request controls include `--repeat-penalty`,
 `--seed`, `--max-tokens`, and `--timeout`. Use `--process` or `--case` to run a
-subset.
+subset. Use `--tier compact` for the fast breadth pass or `--tier deep` for the
+long-context pass; omitting it runs all 87 cases.
 
 The runner sets temperature to zero and disables visible reasoning where the
 serving API supports that switch. It records raw output, wall time, completion
@@ -87,12 +111,19 @@ python3 bench.py score \
   --label MODEL_AND_CONFIG
 ```
 
-Add `--require-complete` when the label should contain all 48 cases. The report
-shows schema passes, full case passes, deterministic check percentage, and
-median server-reported decode rate for each process.
+Add `--require-complete` when the label should contain every selected case. The
+report separates compact and deep results and shows schema passes, full case
+passes, deterministic check percentage, median prompt and completion tokens,
+and median server-reported decode rate for each process. The harness never folds
+the two tiers into one score or ranking.
 
 The checks are process-specific. They cover required and forbidden facts,
 ordering and contradiction decisions, graph entity/relation recall, empty
 session behavior, prompt-injection rejection, quality-judge bands, and metadata
 shape. They do not claim to measure every aspect of writing
 quality or general reasoning.
+
+The deep scorers additionally check the original bakeoff contract: valid JSON,
+three to eight claims, exact source-backed quotes, source coverage, superseded
+references for consolidation, and a substantive compressed deliverable. They do
+not use an LLM judge.

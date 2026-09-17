@@ -24,6 +24,8 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parent
 CORPUS = ROOT / "corpus"
 
+TIERS = ("compact", "deep")
+
 PROCESSES = (
     "memory_consolidation",
     "distill",
@@ -45,17 +47,18 @@ SPACE = re.compile(r"\s+")
 SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*(?:/[a-z0-9]+(?:-[a-z0-9]+)*)?$")
 
 
-def _case(case_id, process, files, variant, expected):
+def _case(case_id, process, files, variant, expected, tier="compact"):
     return {
         "id": case_id,
         "process": process,
         "files": tuple(files),
         "variant": variant,
         "expected": expected,
+        "tier": tier,
     }
 
 
-CASES = (
+COMPACT_CASES = (
     _case(
         "consolidate-memory-pool",
         "memory_consolidation",
@@ -533,6 +536,366 @@ CASES = (
     ),
 )
 
+
+def public_source_path(tag, path):
+    return f"public-akm/{tag}/{path}"
+
+
+def bakeoff_consolidation_case(index, document_count):
+    files = tuple(
+        f"bakeoff/c{index:02d}-{chr(ord('a') + document_index)}.md"
+        for document_index in range(document_count)
+    )
+    return _case(
+        f"deep-bakeoff-c{index:02d}",
+        "memory_consolidation",
+        files,
+        "grounded_consolidate",
+        {},
+        tier="deep",
+    )
+
+
+ANONYMIZED_BAKEOFF_CASES = tuple(
+    bakeoff_consolidation_case(index, document_count)
+    for index, document_count in enumerate((3, 3, 3, 3, 3, 3, 3, 3, 4, 3, 3, 3), start=1)
+) + tuple(
+    _case(
+        f"deep-bakeoff-d{index:02d}",
+        "distill",
+        (f"bakeoff/d{index:02d}.md",),
+        "grounded_distill",
+        {},
+        tier="deep",
+    )
+    for index in range(1, 13)
+)
+
+
+EXTRA_DEEP_CASES = (
+    _case(
+        "deep-graph-adapters",
+        "graph_extraction",
+        (public_source_path("v0.9.15", "docs/architecture/adapters.md"),),
+        "deep_graph",
+        {
+            "entities": {
+                "BundleAdapter",
+                "BUILTIN_ADAPTERS",
+                "FileContext",
+                "akm adapter",
+                "claude",
+                "opencode",
+                "dotenv",
+                "generic-files",
+                "task adapters",
+                "parseTaskSource",
+            },
+            "relations": {
+                ("BundleAdapter", "FileContext"),
+                ("akm adapter", "BundleAdapter"),
+                ("claude", "BundleAdapter"),
+                ("opencode", "BundleAdapter"),
+                ("dotenv", "BundleAdapter"),
+                ("task adapters", "parseTaskSource"),
+            },
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-graph-unit-reuse",
+        "graph_extraction",
+        (public_source_path("v0.9.15", "docs/architecture/decisions/0002-unit-reuse-and-input-hash-scope.md"),),
+        "deep_graph",
+        {
+            "entities": {
+                "computeStepWorkList",
+                "frozen step plan",
+                "WorkListInput",
+                "native-executor",
+                "run-workflow",
+                "computeUnitInputHash",
+                "taskInputs",
+                "gateFeedback",
+                "canonicalJsonString",
+                "journaled unit",
+            },
+            "relations": {
+                ("computeStepWorkList", "frozen step plan"),
+                ("computeStepWorkList", "WorkListInput"),
+                ("native-executor", "computeStepWorkList"),
+                ("run-workflow", "computeStepWorkList"),
+                ("computeUnitInputHash", "taskInputs"),
+                ("computeUnitInputHash", "gateFeedback"),
+                ("canonicalJsonString", "computeUnitInputHash"),
+            },
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-graph-child-environment",
+        "graph_extraction",
+        (public_source_path("v0.9.15", "docs/architecture/decisions/0003-child-env-allowlist-and-provenance.md"),),
+        "deep_graph",
+        {
+            "entities": {
+                "runExecUnit",
+                "IrExecSpec.command",
+                "runManagedSubprocess",
+                "childEnv",
+                "EXEC_DEFAULT_ENV_PASSTHROUGH",
+                "exec.passEnv",
+                "AKM_* context",
+                "resolveEnvBinding",
+                "redactUnitOutcome",
+                "journal",
+            },
+            "relations": {
+                ("runExecUnit", "IrExecSpec.command"),
+                ("runExecUnit", "runManagedSubprocess"),
+                ("childEnv", "EXEC_DEFAULT_ENV_PASSTHROUGH"),
+                ("childEnv", "exec.passEnv"),
+                ("childEnv", "AKM_* context"),
+                ("resolveEnvBinding", "childEnv"),
+                ("redactUnitOutcome", "journal"),
+            },
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-graph-improvement-loop",
+        "graph_extraction",
+        (public_source_path("v0.9.15", "docs/architecture/improvement.md"),),
+        "deep_graph",
+        {
+            "entities": {
+                "akm improve",
+                "utility policy",
+                "autonomy gate",
+                "reflect",
+                "distill",
+                "consolidate",
+                "proposal queue",
+                "state.db",
+                "akm proposal accept",
+                "memory inference",
+                "graph extraction",
+                "bundle",
+            },
+            "relations": {
+                ("akm improve", "reflect"),
+                ("akm improve", "distill"),
+                ("akm improve", "consolidate"),
+                ("reflect", "proposal queue"),
+                ("distill", "proposal queue"),
+                ("consolidate", "proposal queue"),
+                ("proposal queue", "state.db"),
+                ("akm proposal accept", "bundle"),
+                ("autonomy gate", "memory inference"),
+            },
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-reflect-adapters",
+        "reflect_proposal",
+        (public_source_path("v0.9.15", "docs/architecture/adapters.md"),),
+        "deep_reflect",
+        {
+            "feedback": "Add a section titled exactly 'Probe and write boundaries' that explains probe precedence and write allowlists using only the existing facts.",
+            "required": (
+                "probe and write boundaries",
+                "builtin_adapters",
+                "filecontext",
+                "generic-files",
+                "assertakmassetwrite",
+                "parsetasksource",
+            ),
+            "forbidden": ("all adapters can write", "inherits the full filesystem"),
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-reflect-unit-reuse",
+        "reflect_proposal",
+        (public_source_path("v0.9.15", "docs/architecture/decisions/0002-unit-reuse-and-input-hash-scope.md"),),
+        "deep_reflect",
+        {
+            "feedback": "Add a section titled exactly 'Resume invariants' that summarizes purity, hash inputs, and deliberate exclusions without dropping the existing provenance.",
+            "required": (
+                "resume invariants",
+                "computestepworklist",
+                "computeunitinputhash",
+                "taskinputs",
+                "gatefeedback",
+                "canonicaljsonstring",
+                "retry",
+                "onerror",
+                "hashversion",
+            ),
+            "forbidden": ("resume may ignore changed task inputs",),
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-reflect-child-environment",
+        "reflect_proposal",
+        (public_source_path("v0.9.15", "docs/architecture/decisions/0003-child-env-allowlist-and-provenance.md"),),
+        "deep_reflect",
+        {
+            "feedback": "Add a section titled exactly 'Execution security invariants' that makes the environment, containment, capture, and redaction boundaries easy to scan.",
+            "required": (
+                "execution security invariants",
+                "argv",
+                "runmanagedsubprocess",
+                "exec.passenv",
+                "akm_event_source",
+                "http_proxy",
+                "exec_capture_incomplete",
+                "exec_output_limit",
+                "redactunitoutcome",
+            ),
+            "forbidden": ("inherits the entire parent environment",),
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-reflect-improvement-loop",
+        "reflect_proposal",
+        (public_source_path("v0.9.15", "docs/architecture/improvement.md"),),
+        "deep_reflect",
+        {
+            "feedback": "Add a section titled exactly 'Operator sequence' that summarizes the proposal-only flow and the autonomy boundary without removing implementation details.",
+            "required": (
+                "operator sequence",
+                "utility policy",
+                "autonomy gate",
+                "reflect",
+                "distill",
+                "consolidate",
+                "proposal queue",
+                "state.db",
+                "akm proposal accept",
+                "experimental.improveautonomy",
+            ),
+            "forbidden": ("improve writes asset files directly",),
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-judge-health-advisories-update",
+        "proposal_quality_gate",
+        (
+            public_source_path("v0.9.0", "docs/architecture/internals/health-advisories.md"),
+            public_source_path("v0.9.8", "docs/architecture/internals/health-advisories.md"),
+        ),
+        "deep_quality",
+        {
+            "band": "pass",
+            "feedback": "Update the health-advisory reference to current behavior while preserving supported thresholds and remediation guidance.",
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-judge-architecture-update",
+        "proposal_quality_gate",
+        (
+            public_source_path("v0.9.0", "docs/architecture/README.md"),
+            public_source_path("v0.9.2", "docs/architecture/README.md"),
+        ),
+        "deep_quality",
+        {
+            "band": "pass",
+            "feedback": "Bring the architecture overview up to date while preserving supported component boundaries and operational constraints.",
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-judge-unrelated-workflow-decision",
+        "proposal_quality_gate",
+        (
+            public_source_path("v0.9.15", "docs/architecture/adapters.md"),
+            public_source_path("v0.9.15", "docs/architecture/decisions/0002-unit-reuse-and-input-hash-scope.md"),
+        ),
+        "deep_quality",
+        {
+            "band": "reject",
+            "feedback": "Clarify adapter probe precedence and write boundaries without replacing the adapter reference with unrelated workflow material.",
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-judge-unrelated-environment-decision",
+        "proposal_quality_gate",
+        (
+            public_source_path("v0.9.15", "docs/architecture/internals/improve-workflow.md"),
+            public_source_path("v0.9.15", "docs/architecture/decisions/0003-child-env-allowlist-and-provenance.md"),
+        ),
+        "deep_quality",
+        {
+            "band": "reject",
+            "feedback": "Clarify the improve workflow without replacing it with unrelated exec-environment documentation.",
+        },
+        tier="deep",
+    ),
+    _case(
+        "deep-synthesize-workflow-decisions",
+        "memory_consolidation",
+        tuple(
+            public_source_path("v0.9.15", f"docs/architecture/decisions/{name}.md")
+            for name in (
+                "0002-unit-reuse-and-input-hash-scope",
+                "0003-child-env-allowlist-and-provenance",
+                "0005-task-result-vocabulary-and-legacy-read-mapping",
+                "0006-task-source-version-routing",
+                "0011-engine-run-loop-invariants",
+            )
+        ),
+        "grounded_consolidate",
+        {"manifest_id": "composite::workflow-decisions"},
+        tier="deep",
+    ),
+    _case(
+        "deep-synthesize-architecture",
+        "memory_consolidation",
+        tuple(
+            public_source_path("v0.9.15", path)
+            for path in (
+                "docs/architecture/architecture.md",
+                "docs/architecture/adapters.md",
+                "docs/architecture/internals/functional-contract-patterns.md",
+                "docs/architecture/internals/classification.md",
+            )
+        ),
+        "grounded_consolidate",
+        {"manifest_id": "composite::architecture"},
+        tier="deep",
+    ),
+    _case(
+        "deep-synthesize-full-system",
+        "memory_consolidation",
+        tuple(
+            public_source_path("v0.9.15", path)
+            for path in (
+                "docs/architecture/architecture.md",
+                "docs/architecture/adapters.md",
+                "docs/architecture/improvement.md",
+                "docs/architecture/internals/improve-workflow.md",
+                "docs/architecture/internals/classification.md",
+                "docs/architecture/internals/functional-contract-patterns.md",
+                "docs/architecture/decisions/0002-unit-reuse-and-input-hash-scope.md",
+                "docs/architecture/decisions/0003-child-env-allowlist-and-provenance.md",
+            )
+        ),
+        "grounded_consolidate",
+        {"manifest_id": "composite::full-system"},
+        tier="deep",
+    ),
+)
+
+
+DEEP_CASES = ANONYMIZED_BAKEOFF_CASES + EXTRA_DEEP_CASES
+CASES = COMPACT_CASES + DEEP_CASES
 CASE_BY_ID = {case["id"]: case for case in CASES}
 
 
@@ -541,6 +904,11 @@ def corpus_text(relative_path):
 
 
 def asset_ref(relative_path):
+    if relative_path.startswith("bakeoff/"):
+        return f"fixture:{pathlib.PurePosixPath(relative_path).stem}"
+    if relative_path.startswith("public-akm/"):
+        _prefix, tag, path = relative_path.split("/", 2)
+        return f"{tag}:{path}"
     path = relative_path.removesuffix(".md")
     return path.removesuffix("/SKILL")
 
@@ -552,8 +920,53 @@ def source_blocks(case):
     return "".join(blocks)
 
 
+GROUNDED_CONTRACT = """Return ONLY a JSON object, no prose and no code fences, with exactly these keys:
+
+{
+  "title": "<short title for the result>",
+  "confidence": <number between 0 and 1, your confidence this result is correct and useful>,
+  "superseded_refs": ["<refs from the INPUT that this result makes redundant; [] if none>"],
+  "key_claims": [
+    {
+      "claim": "<one factual statement your output relies on>",
+      "source_ref": "<the input ref it came from>",
+      "source_quote": "<a VERBATIM span of at least 8 words copied exactly from that input document>"
+    }
+  ],
+  "output": "<the actual deliverable described below, as markdown>"
+}
+
+Rules:
+- source_quote MUST be copied character-for-character from the input. Do not paraphrase it.
+- Every source_ref MUST be one of the refs given in the input.
+- Provide between 3 and 8 key_claims.
+- Do not state anything in "output" that you cannot support from the input."""
+
+GROUNDED_TASKS = {
+    "grounded_consolidate": (
+        "You are consolidating overlapping documents in a knowledge base.\n\n"
+        "Below are several documents that cover the same subject. Produce ONE "
+        "consolidated document that preserves every distinct fact, drops the "
+        "repetition, and resolves contradictions explicitly (say which version is "
+        "right and why). A consolidated result replaces every input: include every "
+        "input ref exactly once in superseded_refs, and make the key_claims "
+        "collectively cite every input ref at least once.\n\n" + GROUNDED_CONTRACT
+    ),
+    "grounded_distill": (
+        "You are distilling a long document for a knowledge base.\n\n"
+        "Below is one document. Produce a compressed version that a reader could "
+        "use instead of the original: keep every decision, constraint and number "
+        "that changes what someone would do, drop the narrative.\n\n" + GROUNDED_CONTRACT
+    ),
+}
+
+
 def build_messages(case):
     process = case["process"]
+    if case["variant"] in GROUNDED_TASKS:
+        prompt = GROUNDED_TASKS[case["variant"]] + "\n\n=== INPUT DOCUMENTS ===\n" + source_blocks(case)
+        return [("user", prompt)]
+
     if process in ("memory_inference", "remember_enrich"):
         blocks = []
         for relative_path in case["files"]:
@@ -740,6 +1153,21 @@ def graph_pair_match(left, right):
     )
 
 
+def graph_path_match(relations, expected):
+    """Match a required relation directly or through one reified graph node."""
+    if any(graph_pair_match(relation, expected) for relation in relations):
+        return True
+    for first_left, first_right in relations:
+        for second_left, second_right in relations:
+            for first_outer, first_middle in ((first_left, first_right), (first_right, first_left)):
+                for second_middle, second_outer in ((second_left, second_right), (second_right, second_left)):
+                    if graph_phrase_match(first_middle, second_middle) and graph_pair_match(
+                        (first_outer, second_outer), expected
+                    ):
+                        return True
+    return False
+
+
 def parse_frontmatter(text):
     raw = strip_wrappers(text)
     if not raw.startswith("---\n"):
@@ -775,6 +1203,70 @@ def checked(structure, checks):
         "passed": bool(structure) and not failures,
         "failures": ([] if structure else ["invalid output structure"]) + failures,
     }
+
+
+def score_grounded_document(case, text):
+    obj = parse_json(text)
+    refs = {asset_ref(path): corpus_text(path) for path in case["files"]}
+    claims = obj.get("key_claims") if obj else None
+    superseded = obj.get("superseded_refs") if obj else None
+    output = obj.get("output") if obj else None
+    structure = bool(
+        obj
+        and set(obj) == {"title", "confidence", "superseded_refs", "key_claims", "output"}
+        and isinstance(obj["title"], str)
+        and obj["title"].strip()
+        and is_number(obj["confidence"], 0, 1)
+        and isinstance(superseded, list)
+        and all(isinstance(ref, str) and ref in refs for ref in superseded)
+        and isinstance(claims, list)
+        and 3 <= len(claims) <= 8
+        and all(
+            isinstance(claim, dict)
+            and set(claim) == {"claim", "source_ref", "source_quote"}
+            and isinstance(claim["claim"], str)
+            and claim["claim"].strip()
+            and isinstance(claim["source_ref"], str)
+            and claim["source_ref"] in refs
+            and isinstance(claim["source_quote"], str)
+            and claim["source_quote"].strip()
+            for claim in claims
+        )
+        and isinstance(output, str)
+        and output.strip()
+    )
+    claim_rows = [claim for claim in claims or [] if isinstance(claim, dict)]
+    quote_lengths_ok = all(len(str(claim.get("source_quote", "")).split()) >= 8 for claim in claim_rows)
+    quotes_exact = all(
+        normalize(claim.get("source_quote")) in normalize(refs.get(claim.get("source_ref"), ""))
+        for claim in claim_rows
+    )
+    cited_refs = {claim.get("source_ref") for claim in claim_rows}
+    unique_evidence = {
+        (claim.get("source_ref"), normalize(claim.get("source_quote"))) for claim in claim_rows
+    }
+    source_chars = sum(len(body) for body in refs.values())
+    output_chars = len(output.strip()) if isinstance(output, str) else 0
+    checks = [
+        ("quotes contain at least eight words", quote_lengths_ok),
+        ("quotes are exact spans from their cited sources", quotes_exact),
+        ("claims use distinct evidence", len(unique_evidence) == len(claim_rows)),
+        ("deliverable is substantive", output_chars >= 250),
+        ("deliverable is compressed", output_chars <= source_chars * 0.75),
+    ]
+    if case["variant"] == "grounded_consolidate":
+        checks.extend(
+            (
+                ("claims cover every input version", cited_refs == set(refs)),
+                (
+                    "lists every input version exactly once as superseded",
+                    len(superseded or []) == len(refs) and set(superseded or []) == set(refs),
+                ),
+            )
+        )
+    else:
+        checks.append(("claims cite the input document", cited_refs == set(refs)))
+    return checked(structure, checks)
 
 
 def valid_consolidation_op(operation):
@@ -933,10 +1425,13 @@ def score_graph(case, text):
     expected_entities = case["expected"]["entities"]
     expected_relations = case["expected"]["relations"]
     entity_recall = sum(any(graph_phrase_match(got, expected) for got in got_entities) for expected in expected_entities) / len(expected_entities)
-    relation_recall = sum(any(graph_pair_match(got, expected) for got in got_relations) for expected in expected_relations) / len(expected_relations)
+    relation_recall = sum(graph_path_match(got_relations, expected) for expected in expected_relations) / len(expected_relations)
     endpoints_ok = all(a in got_entities and b in got_entities for a, b in got_relations)
-    source = normalize(corpus_text(case["files"][0]))
-    grounded = sum(entity in source for entity in got_entities) / max(1, len(got_entities))
+    source_tokens = set(graph_tokens(corpus_text(case["files"][0])))
+    grounded = sum(
+        bool(graph_tokens(entity)) and set(graph_tokens(entity)).issubset(source_tokens)
+        for entity in got_entities
+    ) / max(1, len(got_entities))
     return checked(
         structure,
         [
@@ -1529,7 +2024,94 @@ At a depth of 800, return HTTP 429 for batch jobs with a 30-second Retry-After w
 
 
 def score_case(case, text):
+    if case["variant"] in GROUNDED_TASKS:
+        return score_grounded_document(case, text)
     return SCORERS[case["process"]](case, text)
+
+
+def calibration_quotes(body, count):
+    candidates = []
+    for paragraph in re.split(r"\n\s*\n", body):
+        words = SPACE.sub(" ", paragraph).strip().split()
+        if len(words) >= 10:
+            candidates.append(" ".join(words[: min(18, len(words))]))
+    if len(candidates) < count:
+        words = SPACE.sub(" ", body).strip().split()
+        for offset in range(0, len(words) - 9, 18):
+            candidates.append(" ".join(words[offset : offset + 18]))
+    unique = []
+    for candidate in candidates:
+        if candidate not in unique:
+            unique.append(candidate)
+        if len(unique) == count:
+            break
+    if len(unique) != count:
+        raise ValueError("source does not contain enough calibration quotes")
+    return unique
+
+
+def grounded_calibration(case):
+    claims = []
+    if case["variant"] == "grounded_consolidate":
+        for path in case["files"]:
+            ref = asset_ref(path)
+            quote = calibration_quotes(corpus_text(path), 1)[0]
+            claims.append({"claim": f"Calibration claim from {ref}.", "source_ref": ref, "source_quote": quote})
+        superseded = [asset_ref(path) for path in case["files"]]
+    else:
+        path = case["files"][0]
+        ref = asset_ref(path)
+        claims = [
+            {"claim": f"Calibration claim {index + 1}.", "source_ref": ref, "source_quote": quote}
+            for index, quote in enumerate(calibration_quotes(corpus_text(path), 3))
+        ]
+        superseded = []
+    combined = SPACE.sub(" ", " ".join(corpus_text(path) for path in case["files"])).strip()
+    output_length = min(1200, max(300, len(combined) // 5))
+    return json.dumps(
+        {
+            "title": "Grounded calibration",
+            "confidence": 0.95,
+            "superseded_refs": superseded,
+            "key_claims": claims,
+            "output": combined[:output_length],
+        }
+    )
+
+
+def calibration_for(case):
+    calibration = GOOD_OUTPUTS.get(case["id"])
+    if calibration is not None:
+        return calibration
+    if case["variant"] in GROUNDED_TASKS:
+        return grounded_calibration(case)
+    if case["variant"] == "deep_graph":
+        entities = set(case["expected"]["entities"])
+        for source, target in case["expected"]["relations"]:
+            entities.update((source, target))
+        return json.dumps(
+            {
+                "entities": sorted(entities),
+                "relations": [
+                    {"from": source, "to": target, "type": "relates to"}
+                    for source, target in sorted(case["expected"]["relations"])
+                ],
+            }
+        )
+    if case["variant"] == "deep_reflect":
+        _frontmatter, body = parse_frontmatter(corpus_text(case["files"][0]))
+        heading = case["expected"]["required"][0].title()
+        return json.dumps(
+            {
+                "content": f"# {heading}\n\n{body}",
+                "frontmatterPatch": {"description": None, "when_to_use": None},
+                "confidence": 0.95,
+            }
+        )
+    if case["variant"] == "deep_quality":
+        score = 4.5 if case["expected"]["band"] == "pass" else 1.5
+        return json.dumps({"score": score, "reason": "Calibration response for the expected quality band."})
+    return None
 
 
 def suite_fingerprint():
@@ -1543,11 +2125,18 @@ def suite_fingerprint():
 
 
 def command_list(_args):
-    print(f"{'process':<34} cases")
-    print("-" * 64)
-    for process in PROCESSES:
-        cases = [case for case in CASES if case["process"] == process]
-        print(f"{process:<34} {len(cases):>2}  " + ", ".join(case["id"] for case in cases))
+    print(f"{'tier':<9} {'process':<34} cases  source chars")
+    print("-" * 92)
+    for tier in TIERS:
+        for process in PROCESSES:
+            cases = [case for case in CASES if case["tier"] == tier and case["process"] == process]
+            if not cases:
+                continue
+            sizes = [sum(len(corpus_text(path)) for path in case["files"]) for case in cases]
+            print(
+                f"{tier:<9} {process:<34} {len(cases):>2}  "
+                f"{min(sizes):>6,}-{max(sizes):<6,}  " + ", ".join(case["id"] for case in cases)
+            )
 
 
 def command_verify(_args):
@@ -1557,9 +2146,30 @@ def command_verify(_args):
     covered = {case["process"] for case in CASES}
     if covered != set(PROCESSES):
         errors.append(f"process coverage mismatch: missing={sorted(set(PROCESSES) - covered)} extra={sorted(covered - set(PROCESSES))}")
-    case_counts = {process: sum(case["process"] == process for case in CASES) for process in PROCESSES}
-    if any(count != 4 for count in case_counts.values()):
-        errors.append(f"expected four cases per process: {case_counts}")
+    compact_counts = {
+        process: sum(case["tier"] == "compact" and case["process"] == process for case in CASES)
+        for process in PROCESSES
+    }
+    if any(count != 4 for count in compact_counts.values()):
+        errors.append(f"expected four compact cases per process: {compact_counts}")
+    if any(case["tier"] not in TIERS for case in CASES):
+        errors.append("case uses an unknown tier")
+    if len(ANONYMIZED_BAKEOFF_CASES) != 24:
+        errors.append(f"expected 24 anonymized bakeoff cases, found {len(ANONYMIZED_BAKEOFF_CASES)}")
+    if len(EXTRA_DEEP_CASES) != 15:
+        errors.append(f"expected 15 extended deep cases, found {len(EXTRA_DEEP_CASES)}")
+    if len(DEEP_CASES) != 39:
+        errors.append(f"expected 39 deep cases, found {len(DEEP_CASES)}")
+    deep_counts = {process: sum(case["process"] == process for case in DEEP_CASES) for process in PROCESSES}
+    expected_deep_counts = {
+        "memory_consolidation": 15,
+        "distill": 12,
+        "graph_extraction": 4,
+        "proposal_quality_gate": 4,
+        "reflect_proposal": 4,
+    }
+    if any(deep_counts[process] != expected_deep_counts.get(process, 0) for process in PROCESSES):
+        errors.append(f"unexpected deep-case split: {deep_counts}")
     for case in CASES:
         for relative_path in case["files"]:
             path = CORPUS / relative_path
@@ -1571,26 +2181,69 @@ def command_verify(_args):
             build_messages(case)
         except Exception as error:
             errors.append(f"{case['id']}: prompt construction failed: {error}")
-        if case["id"] not in GOOD_OUTPUTS:
+        calibration = calibration_for(case)
+        if calibration is None:
             errors.append(f"{case['id']}: no scorer calibration output")
             continue
-        result = score_case(case, GOOD_OUTPUTS[case["id"]])
+        result = score_case(case, calibration)
         if not result["passed"]:
             errors.append(f"{case['id']}: good calibration failed: {', '.join(result['failures'])}")
+        if case["variant"] in GROUNDED_TASKS:
+            fabricated = json.loads(calibration)
+            fabricated["key_claims"][0]["source_quote"] = (
+                "This fabricated quotation contains enough words but appears in no source document."
+            )
+            if score_case(case, json.dumps(fabricated))["passed"]:
+                errors.append(f"{case['id']}: fabricated source quote incorrectly passed")
         bad = score_case(case, "")
         if bad["passed"]:
             errors.append(f"{case['id']}: empty output incorrectly passed")
     files = [path for path in CORPUS.rglob("*") if path.is_file()]
+    actual_paths = {path.relative_to(CORPUS).as_posix() for path in files}
+    used_paths = {relative_path for case in CASES for relative_path in case["files"]}
+    if actual_paths != used_paths:
+        errors.append(
+            "corpus inventory mismatch: "
+            f"missing={sorted(used_paths - actual_paths)} extra={sorted(actual_paths - used_paths)}"
+        )
+    expected_bakeoff_paths = {
+        relative_path
+        for case in ANONYMIZED_BAKEOFF_CASES
+        for relative_path in case["files"]
+    }
+    if len(expected_bakeoff_paths) != 49:
+        errors.append(f"expected 49 anonymized bakeoff documents, found {len(expected_bakeoff_paths)}")
     for path in files:
         text = path.read_text(encoding="utf-8").casefold()
-        for forbidden in ("192.168.", "client name", "customer name", "/home/", "lan-only"):
+        for forbidden in (
+            "192.168.",
+            "client name",
+            "customer name",
+            "/home/",
+            "lan-only",
+        ):
             if forbidden in text:
                 errors.append(f"{path.relative_to(ROOT)}: contains forbidden publication marker {forbidden!r}")
+        if path.relative_to(CORPUS).as_posix().startswith("bakeoff/"):
+            for pattern in (
+                r"\bsession:(?!example-[0-9a-f]{8}\b)[a-z0-9-]+",
+                r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+                r"\b[a-f0-9]{16,}\b",
+                r"https?://(?!localhost(?::[0-9]+)?\b|[a-z0-9.-]+\.invalid\b)",
+                r"[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}",
+            ):
+                if re.search(pattern, text):
+                    errors.append(
+                        f"{path.relative_to(ROOT)}: contains non-anonymized bakeoff marker {pattern!r}"
+                    )
     if errors:
         for error in errors:
             print(f"ERROR {error}")
         raise SystemExit(1)
-    print(f"verified {len(files)} corpus assets, {len(CASES)} cases, {len(PROCESSES)} processes")
+    print(
+        f"verified {len(files)} corpus files, {len(CASES)} cases "
+        f"({len(COMPACT_CASES)} compact, {len(DEEP_CASES)} deep), {len(PROCESSES)} processes"
+    )
     print(f"suite fingerprint {suite_fingerprint()}")
 
 
@@ -1629,6 +2282,7 @@ def call_chat(args, case):
         endpoint = f"{args.url.rstrip('/')}/api/v0/chat/completions"
     else:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
+        payload["cache_prompt"] = False
         endpoint = f"{args.url.rstrip('/')}/v1/chat/completions"
     raw, elapsed = post_json(endpoint, payload, request_headers(args.api_key_env), args.timeout)
     reply = json.loads(raw)
@@ -1660,6 +2314,9 @@ def call_chat(args, case):
 
 def selected_cases(args):
     cases = list(CASES)
+    if getattr(args, "tier", None):
+        wanted = set(args.tier)
+        cases = [case for case in cases if case["tier"] in wanted]
     if getattr(args, "process", None):
         wanted = set(args.process)
         cases = [case for case in cases if case["process"] in wanted]
@@ -1704,6 +2361,7 @@ def command_run(args):
                 "label": args.label,
                 "case_id": case["id"],
                 "process": case["process"],
+                "tier": case["tier"],
                 "model": args.model,
                 "request": {
                     "api": args.api,
@@ -1742,25 +2400,49 @@ def command_score(args):
         case = CASE_BY_ID.get(record.get("case_id"))
         if not case:
             continue
+        if args.tier and case["tier"] not in set(args.tier):
+            continue
         result = score_case(case, record.get("text", "")) if record.get("ok") else checked(False, [("request succeeded", False)])
-        key = (record.get("label", ""), case["process"])
-        row = aggregates.setdefault(key, {"n": 0, "structure": 0, "passed": 0, "earned": 0, "possible": 0, "tps": []})
+        key = (record.get("label", ""), case["tier"], case["process"])
+        row = aggregates.setdefault(
+            key,
+            {
+                "n": 0,
+                "structure": 0,
+                "passed": 0,
+                "earned": 0,
+                "possible": 0,
+                "prompt_tokens": [],
+                "completion_tokens": [],
+                "tps": [],
+            },
+        )
         row["n"] += 1
         row["structure"] += int(result["structure"])
         row["passed"] += int(result["passed"])
         row["earned"] += result["earned"]
         row["possible"] += result["possible"]
+        if is_number(record.get("prompt_tokens")):
+            row["prompt_tokens"].append(record["prompt_tokens"])
+        if is_number(record.get("completion_tokens")):
+            row["completion_tokens"].append(record["completion_tokens"])
         if is_number(record.get("decode_tps")):
             row["tps"].append(record["decode_tps"])
         details.append((record, result))
-    print(f"{'label':<18} {'process':<34} {'n':>3} {'shape':>7} {'pass':>7} {'checks':>8} {'t/s':>8}")
-    print("-" * 90)
-    for (label, process), row in sorted(aggregates.items()):
+    print(
+        f"{'label':<18} {'tier':<8} {'process':<34} {'n':>3} {'shape':>7} "
+        f"{'pass':>7} {'checks':>8} {'prompt':>8} {'output':>8} {'t/s':>8}"
+    )
+    print("-" * 119)
+    for (label, tier, process), row in sorted(aggregates.items()):
         check_rate = 100 * row["earned"] / row["possible"] if row["possible"] else 0
+        prompt_tokens = f"{statistics.median(row['prompt_tokens']):.0f}" if row["prompt_tokens"] else "-"
+        completion_tokens = f"{statistics.median(row['completion_tokens']):.0f}" if row["completion_tokens"] else "-"
         speed = f"{statistics.median(row['tps']):.1f}" if row["tps"] else "-"
         print(
-            f"{label:<18} {process:<34} {row['n']:>3} "
-            f"{row['structure']:>3}/{row['n']:<3} {row['passed']:>3}/{row['n']:<3} {check_rate:>7.0f}% {speed:>8}"
+            f"{label:<18} {tier:<8} {process:<34} {row['n']:>3} "
+            f"{row['structure']:>3}/{row['n']:<3} {row['passed']:>3}/{row['n']:<3} {check_rate:>7.0f}% "
+            f"{prompt_tokens:>8} {completion_tokens:>8} {speed:>8}"
         )
     failures = [(record, result) for record, result in details if not result["passed"]]
     if failures:
@@ -1769,9 +2451,16 @@ def command_score(args):
             print(f"- {record.get('label')} / {record.get('case_id')}: " + "; ".join(result["failures"]))
     if args.require_complete:
         labels = {record.get("label") for record in records}
+        expected_ids = {
+            case["id"] for case in CASES if not args.tier or case["tier"] in set(args.tier)
+        }
         for label in labels:
-            seen = {record.get("case_id") for record in records if record.get("label") == label}
-            missing = set(CASE_BY_ID) - seen
+            seen = {
+                record.get("case_id")
+                for record in records
+                if record.get("label") == label and record.get("case_id") in expected_ids
+            }
+            missing = expected_ids - seen
             if missing:
                 raise SystemExit(f"label {label!r} is missing {len(missing)} cases")
 
@@ -1789,17 +2478,19 @@ def main():
     run.add_argument("--model", help="chat model identifier")
     run.add_argument("--api", choices=("llamacpp", "lmstudio"), default="llamacpp")
     run.add_argument("--api-key-env", help="environment variable containing the endpoint API key")
+    run.add_argument("--tier", action="append", choices=TIERS, help="run only this workload tier; repeatable")
     run.add_argument("--process", action="append", choices=PROCESSES, help="run only this process; repeatable")
     run.add_argument("--case", action="append", help="run only this case id; repeatable")
     run.add_argument("--limit", type=int, help="run only the first N selected cases")
     run.add_argument("--timeout", type=int, default=900)
     run.add_argument("--seed", type=int, default=20260916)
-    run.add_argument("--max-tokens", type=int, default=3000)
+    run.add_argument("--max-tokens", type=int, default=6000)
     run.add_argument("--repeat-penalty", type=float)
 
     score = sub.add_parser("score", help="score a local JSONL result file")
     score.add_argument("--results", required=True)
     score.add_argument("--label", help="score only one configuration label")
+    score.add_argument("--tier", action="append", choices=TIERS, help="score only this workload tier; repeatable")
     score.add_argument("--require-complete", action="store_true", help="fail when a label lacks any suite case")
 
     args = parser.parse_args()
