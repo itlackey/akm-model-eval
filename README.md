@@ -5,7 +5,7 @@ model-backed work AKM asks an endpoint to perform.
 
 The suite is intentionally small:
 
-- `corpus/` contains 20 public, synthetic AKM-style assets about one fictional
+- `corpus/` contains 21 public, synthetic AKM-style assets about one fictional
   system. No private benchmark material is included.
 - `bench.py` contains the 19 case mappings, prompts, endpoint runner, resume
   logic, deterministic scorers, and scorer calibrations.
@@ -52,7 +52,9 @@ python3 bench.py verify
 ## Run chat cases
 
 `run` appends one JSON object per case and resumes completed case-and-label
-pairs. Supply a distinct label for each model or server configuration.
+pairs. Supply a distinct label for each model or server configuration. Results
+include the suite fingerprint; the runner and scorer reject results from a
+different corpus or case revision.
 
 ```sh
 python3 bench.py run \
