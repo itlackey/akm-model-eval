@@ -1,49 +1,202 @@
 # AKM Model Eval
 
-A frozen public corpus and one standard-library Python script for comparing
-models on the work AKM asks an endpoint to perform. This is a model capability
-benchmark. It does not measure whether AKM itself improves an agent; `akm-eval`
+A public, deterministic benchmark for comparing how well chat models perform
+the work AKM asks an inference endpoint to do.
+
+This repository contains the frozen corpus and a single standard-library Python
+runner. It does not download fixtures, call a judge model, or require AKM to be
+installed.
+
+This benchmark measures **model capability on AKM-shaped tasks**. It does not
+measure whether using AKM improves an agent; [akm-eval](https://github.com/itlackey/akm-eval)
 owns that job.
 
-The suite has three workload tiers and four separately reported tracks:
+## Requirements
 
-- `compact / focused` contains 52 focused cases, four for each of 13
-  model-backed tasks. Its synthetic assets describe one fictional system and
-  expose precise facts that deterministic checks can verify.
-- `deep / legacy` contains 39 cases. Its core is the bakeoff's original
-  24-item workload: 12 consolidations and 12 distillations built from 49 static
-  source documents.
-  Client/project names, user and session identifiers, internal paths, dates, and
-  the original item IDs were replaced with stable generic aliases. Document
-  count, ordering, structure, numeric constraints, and overlap between versions
-  were retained.
-- The other 15 legacy deep cases add work the original bakeoff did not cover: four
-  long-document graph extractions, four grounded revisions, four proposal-quality
-  judgments, and three multi-document syntheses. They use 15 exact documents
-  copied from the public AKM revisions named in their corpus paths. The largest
-  case contains 118,767 source characters.
-- `deep / production` contains 29 cases shaped like current AKM calls: 20–35
-  memory consolidation pools, memory distillation and review-band quality
-  judgments, ordered graph batches and 1,600-character chunk calls, revisions
-  of real asset shapes, complex session extraction and summaries, existing-
-  metadata enhancement, and schema repair across six asset types.
-- `context / context` contains three otherwise identical extraction tasks at
-  approximately 35.7K, 47.7K, and 65.8K prompt tokens. This keeps endpoint
-  context qualification separate from compact accuracy and deep task scores.
+- Python 3.10 or newer;
+- a llama.cpp OpenAI-compatible chat endpoint, or LM Studio;
+- enough context for the cases you select. The largest context case is about
+  65.8K prompt tokens, so a full run needs an endpoint configured above that.
 
-The anonymized fixtures preserve the original workload, not byte identity, so
-new scores are not numerically interchangeable with results from the private
-bakeoff corpus. There is deliberately no mapping back to its private IDs.
-Everything needed to run is checked in across 141 corpus files: there is no
-corpus generator, downloader, package install, separate case file, or model
-judge.
+No Python packages are required.
 
-## Coverage
+## Quick start
 
-The process inventory was checked against the live model-feature call sites in
-`itlackey/akm` commit `7c50f57c8e2da101f2b9226e5fbaa7d9c7cab0e5`.
-The suite covers all 12 bounded chat-completion feature keys with real call
-sites at that revision, plus the active proposal-triage judgment call:
+Clone the repository and verify the corpus and scorers offline:
+
+```sh
+git clone https://github.com/itlackey/akm-model-eval.git
+cd akm-model-eval
+python3 bench.py verify
+```
+
+Run the 52-case compact suite first:
+
+```sh
+python3 bench.py run \
+  --label my-model-config \
+  --results ./results.jsonl \
+  --url http://127.0.0.1:8080 \
+  --model my-model-id \
+  --tier compact
+```
+
+`--url` is the server base URL **without** `/v1`.
+
+Score that run locally:
+
+```sh
+python3 bench.py score \
+  --results ./results.jsonl \
+  --label my-model-config \
+  --tier compact \
+  --require-complete
+```
+
+If those commands succeed, omit `--tier compact` to run and score all 123
+cases:
+
+```sh
+python3 bench.py run \
+  --label my-model-config \
+  --results ./results.jsonl \
+  --url http://127.0.0.1:8080 \
+  --model my-model-id
+
+python3 bench.py score \
+  --results ./results.jsonl \
+  --label my-model-config \
+  --require-complete
+```
+
+## Choose the run size
+
+The suite keeps different workload shapes separate rather than folding them
+into one score.
+
+| Run | Cases | What it answers | Filter |
+| --- | ---: | --- | --- |
+| Compact / focused | 52 | Does the model handle the full breadth of AKM processes? | `--tier compact` |
+| Deep / production | 29 | Can it handle current, larger AKM request shapes? | `--tier deep --track production` |
+| Deep / legacy | 39 | How does it perform on the anonymized original bakeoff workload and its extensions? | `--tier deep --track legacy` |
+| Context | 3 | Can the endpoint process approximately 35.8K, 47.7K, and 65.8K prompt tokens? | `--tier context` |
+| Full suite | 123 | Run every group above | no tier or track filter |
+
+A practical qualification sequence is:
+
+```sh
+# 1. Breadth
+python3 bench.py run ... --tier compact
+
+# 2. Current production-shaped work
+python3 bench.py run ... --tier deep --track production
+
+# 3. Historical comparison
+python3 bench.py run ... --tier deep --track legacy
+
+# 4. Endpoint context limits
+python3 bench.py run ... --tier context
+```
+
+Replace `...` with the same `--label`, `--results`, `--url`, and `--model`
+arguments from the quick-start command. All four commands may append to the
+same results file.
+
+## Labels, resuming, and retries
+
+Use a distinct label for every model and serving configuration. Include details
+that can affect results, such as quantization, runtime, context size, KV type,
+slot count, and hardware placement.
+
+`run` appends one JSON object per attempt. Re-running the same command with the
+same label and results file skips successful cases and resumes incomplete ones.
+Failed attempts remain in the JSONL evidence, while scoring uses the latest
+attempt for each case.
+
+Transport failures and HTTP 408, 425, 429, 500, 502, 503, and 504 responses are
+retried five times with exponential backoff by default. Adjust this with
+`--retries` and `--retry-backoff`.
+
+The runner and scorer record the suite fingerprint and reject results produced
+by a different corpus or case revision.
+
+## Endpoint options
+
+llama.cpp is the default:
+
+```sh
+python3 bench.py run \
+  --label llama-example \
+  --results ./results.jsonl \
+  --url http://127.0.0.1:8080 \
+  --model model-alias
+```
+
+For LM Studio's native response route, add:
+
+```sh
+--api lmstudio
+```
+
+For an authenticated endpoint, place the key in an environment variable and
+name it without exposing its value:
+
+```sh
+--api-key-env MODEL_API_KEY
+```
+
+Optional request controls include `--repeat-penalty`, `--seed`, `--max-tokens`,
+and `--timeout`. The runner sets temperature to zero and disables visible
+reasoning where the serving API supports it.
+
+## Run a smaller selection
+
+Inspect the complete process and case inventory:
+
+```sh
+python3 bench.py list
+```
+
+Run one process, one case, or the first few selected cases:
+
+```sh
+python3 bench.py run ... --process graph_extraction
+python3 bench.py run ... --case prod-session-complex-extraction
+python3 bench.py run ... --tier compact --limit 5
+```
+
+`--tier`, `--track`, `--process`, and `--case` are repeatable.
+
+See every supported option with:
+
+```sh
+python3 bench.py run --help
+python3 bench.py score --help
+```
+
+## Read the score report
+
+Scoring reads local result files only. It reports results separately by tier,
+track, context-length band, and process, including:
+
+- structurally valid responses;
+- full case passes;
+- deterministic check percentage;
+- median prompt and completion tokens;
+- median server-reported prefill and decode rates, when the server supplies
+  them.
+
+Use `--require-complete` when every case selected by the score command must be
+present. Omit it while inspecting an in-progress run.
+
+The harness never combines compact, legacy, production, and context results
+into one ranking. Throughput is also meaningful only when the request shape is
+stated.
+
+## What the suite covers
+
+The corpus contains 141 checked-in files and 123 cases across 13 model-backed
+AKM processes:
 
 - memory consolidation;
 - knowledge and lesson distillation;
@@ -53,108 +206,58 @@ sites at that revision, plus the active proposal-triage judgment call:
 - lesson quality judgment;
 - proposal quality judgment;
 - memory contradiction detection;
-- session extraction;
+- session extraction and session summaries;
 - reflection proposals;
 - `remember` enrichment;
 - schema repair;
-- proposal triage (`accept`, `reject`, or `defer` using the live asset and
-  sibling proposals).
+- proposal triage.
 
-Session extraction also includes the separate session-summary call under the
-same process row.
+The process inventory was checked against the live model-feature call sites in
+`itlackey/akm` commit `7c50f57c8e2da101f2b9226e5fbaa7d9c7cab0e5`.
+Curate reranking is deliberately excluded because it uses a dedicated
+cross-encoder and a different request protocol.
 
-Curate reranking is deliberately excluded. It uses a dedicated cross-encoder,
-a different request protocol, and a different model; it does not measure a chat
-model's ability to perform AKM work.
+### Compact / focused
 
-Run the coverage inventory at any time:
+The compact tier has four focused cases for each process. Its synthetic assets
+describe one fictional system and expose precise facts that deterministic
+checks can verify.
 
-```sh
-python3 bench.py list
-```
+### Deep / legacy
 
-The compact tier supplies process breadth and precise regression checks. The
-legacy deep track preserves historical comparability. The production deep track
-tests current AKM request shapes, including preservation and false-positive
-behavior. The context tier qualifies endpoint limits independently. Deep work
-includes reconciling overlapping knowledge, preserving constraints during
-distillation, extracting a graph from a substantial document, revising without
-inventing facts, judging a large proposed change, and synthesizing several
-sources. Short schema and classification calls are not padded to look long.
+The legacy track contains the original bakeoff's 24-item consolidation and
+distillation workload, built from 49 anonymized source documents, plus 15 cases
+covering long-document graph extraction, grounded revision, proposal-quality
+judgment, and multi-document synthesis.
 
-## Verify
+Names, identifiers, internal paths, and dates were replaced with stable generic
+aliases. Document ordering, structure, numeric constraints, and overlap between
+versions were retained. There is no mapping back to private item IDs.
 
-Verification is offline. It checks the exact corpus inventory, all 49 anonymized
-bakeoff documents, complete process coverage, case IDs and tracks, context-size
-bands, every process-specific scorer against a known-good response, rejection
-of empty responses, exact-quote grounding failures, deliberately injected false
-positives and preservation losses, and publication-safety markers.
+### Deep / production
 
-```sh
-python3 bench.py verify
-```
+The production track covers current AKM request shapes: 20–35-memory pools,
+distillation and review-band judgments, ordered graph batches, chunk merging,
+grounded revisions, complex session extraction, metadata enhancement, and
+schema repair across six asset types.
 
-## Run chat cases
+### Context
 
-`run` appends one JSON object per attempt and resumes successful case-and-label
-pairs. Transient transport failures and HTTP 408, 425, 429, 500, 502, 503, and
-504 responses are retried five times with exponential backoff by default. A
-failed case remains in the JSONL evidence but is attempted again on resume;
-scoring uses its latest attempt, so recovery neither erases the outage nor
-double-counts the case. Supply a distinct label for each model or server configuration. Results
-include the suite fingerprint; the runner and scorer reject results from a
-different corpus or case revision.
+The context tier runs otherwise identical extraction work at approximately
+35.8K, 47.7K, and 65.8K prompt tokens. It qualifies endpoint limits separately
+from model accuracy.
 
-```sh
-python3 bench.py run \
-  --label MODEL_AND_CONFIG \
-  --results /tmp/akm-model-eval.jsonl \
-  --url CHAT_BASE_URL \
-  --model MODEL_ID
-```
+## Scoring boundaries
 
-The URL is the server base without `/v1`. Add `--api lmstudio` for LM Studio's
-native response route. Optional request controls include `--repeat-penalty`,
-`--seed`, `--max-tokens`, `--timeout`, `--retries`, and `--retry-backoff`. Use `--process`, `--case`, or
-`--track` to run a subset. Use `--tier compact` for the fast breadth pass,
-`--tier deep --track production` for current AKM workloads, or `--tier context`
-for endpoint context qualification. Omitting filters runs all 123 cases.
+Checks are process-specific. They cover required and forbidden facts, ordering,
+contradiction decisions, graph recall and precision, empty placeholders, chunk
+merging, duplicate handling, prompt-injection rejection, quality bands,
+frontmatter and template preservation, metadata grounding, and missing-field
+repair.
 
-The chunked graph case makes one endpoint request per production-sized chunk
-and stores individual request metrics with the combined case record. Other
-cases make one request each.
+Legacy grounding checks additionally require valid JSON, source-backed quotes,
+source coverage, superseded references for consolidation, and a substantive
+compressed deliverable.
 
-The runner sets temperature to zero and disables visible reasoning where the
-serving API supports that switch. It records raw output, wall time, completion
-tokens, finish reason, reasoning fallback, server-reported decode rate, prompt
-characters, and the conservative prompt-token estimate used for context bands.
-
-## Score
-
-Scoring reads local files only:
-
-```sh
-python3 bench.py score \
-  --results /tmp/akm-model-eval.jsonl \
-  --label MODEL_AND_CONFIG
-```
-
-Add `--require-complete` when the label should contain every selected case. The
-report separates tier, track, context-length band, and process and shows schema
-passes, full case passes, deterministic check percentage, median prompt and
-completion tokens, and median server-reported prefill and decode rates. The
-harness never folds compact, legacy, production, or context results into one
-score or ranking.
-
-The checks are process-specific. They cover required and forbidden facts,
-ordering and contradiction decisions, graph recall and precision, ordered empty
-placeholders, chunk merging, empty and duplicate session behavior, prompt-
-injection rejection, pass/review/reject quality bands, proposal triage,
-frontmatter/code/table/template preservation, metadata grounding, and exact
-missing-field repair. They do not claim to measure every aspect of writing
-quality or general reasoning.
-
-The legacy grounded scorers additionally check the original bakeoff contract: valid JSON,
-three to eight claims, exact source-backed quotes, source coverage, superseded
-references for consolidation, and a substantive compressed deliverable. They do
-not use an LLM judge.
+The benchmark does not claim to measure every aspect of writing quality or
+general reasoning, and it does not use an LLM judge.
