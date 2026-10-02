@@ -3920,7 +3920,7 @@ def call_chat_messages(args, message_pairs):
     payload = {
         "model": args.model,
         "messages": messages,
-        "temperature": 0.0,
+        "temperature": args.temperature,
         "seed": args.seed,
         "max_tokens": args.max_tokens,
         "stream": False,
@@ -4076,7 +4076,7 @@ def command_run(args):
                 "model": args.model,
                 "request": {
                     "api": args.api,
-                    "temperature": 0.0,
+                    "temperature": args.temperature,
                     "seed": args.seed,
                     "max_tokens": args.max_tokens,
                     "repeat_penalty": args.repeat_penalty,
@@ -4229,6 +4229,7 @@ def main():
     run.add_argument("--timeout", type=int, default=900)
     run.add_argument("--seed", type=int, default=20260916)
     run.add_argument("--max-tokens", type=int, default=6000)
+    run.add_argument("--temperature", type=float, default=0.0)
     run.add_argument("--repeat-penalty", type=float)
     run.add_argument("--retries", type=int, default=5, help="retry transient request failures this many times")
     run.add_argument("--retry-backoff", type=float, default=2.0, help="initial exponential retry delay in seconds")

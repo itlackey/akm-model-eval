@@ -145,9 +145,10 @@ name it without exposing its value:
 --api-key-env MODEL_API_KEY
 ```
 
-Optional request controls include `--repeat-penalty`, `--seed`, `--max-tokens`,
-and `--timeout`. The runner sets temperature to zero and disables visible
-reasoning where the serving API supports it.
+Optional request controls include `--temperature` (default 0),
+`--repeat-penalty`, `--seed`, `--max-tokens`, and `--timeout`. Each record
+stores the request settings it ran with. The runner disables visible reasoning
+where the serving API supports it.
 
 ## Run a smaller selection
 
