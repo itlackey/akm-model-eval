@@ -262,3 +262,13 @@ compressed deliverable.
 
 The benchmark does not claim to measure every aspect of writing quality or
 general reasoning, and it does not use an LLM judge.
+
+## Judge gate
+
+[`judge-gate/`](judge-gate/README.md) holds 106 labelled revisions of knowledge assets for testing a model as akm's
+reflect quality judge, with `akm improve judge`. It is separate from the benchmark above: `bench.py` does not run it.
+
+## License
+
+Everything in this repository, including the corpus, the judge-gate cases and `bench.py`, is licensed under the
+Creative Commons Attribution 4.0 International license (CC BY 4.0); see [LICENSE](LICENSE).
