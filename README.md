@@ -1,3 +1,8 @@
+> **Archived on 2026-10-05.** This benchmark moved to [akm-eval](https://github.com/itlackey/akm-eval):
+> the harness and corpus are [`evals/bakeoff`](https://github.com/itlackey/akm-eval/tree/main/evals/bakeoff), and the
+> judge-gate cases are [`evals/judge-gate`](https://github.com/itlackey/akm-eval/tree/main/evals/judge-gate). This
+> repository is read-only.
+
 # AKM Model Eval
 
 A public, deterministic benchmark for comparing how well chat models perform
